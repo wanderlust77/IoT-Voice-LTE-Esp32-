@@ -104,8 +104,36 @@ bool LTEManager::checkNetwork(uint32_t timeout_ms) {
   LOG_I("LTE", "Checking network registration...");
   
   // Check SIM status
-  if (!sendATCommand("AT+CPIN?", "+CPIN: READY", 5000)) {
-    LOG_E("LTE", "SIM not ready");
+  String pinResponse;
+  if (!sendATCommandGetResponse("AT+CPIN?", pinResponse, 5000)) {
+    LOG_E("LTE", "Failed to query SIM PIN status");
+    return false;
+  }
+  
+  // Check if SIM requires PIN
+  if (pinResponse.indexOf("+CPIN: SIM PIN") >= 0) {
+    LOG_I("LTE", "SIM requires PIN unlock");
+    
+    // Check if PIN is configured
+    if (strlen(LTE_PIN) > 0) {
+      char pinCmd[32];
+      snprintf(pinCmd, sizeof(pinCmd), "AT+CPIN=%s", LTE_PIN);
+      
+      if (!sendATCommand(pinCmd, "OK", 5000)) {
+        LOG_E("LTE", "Failed to unlock SIM with PIN");
+        return false;
+      }
+      
+      LOG_I("LTE", "SIM unlocked successfully");
+      delay(2000);  // Wait for SIM to initialize after unlock
+    } else {
+      LOG_E("LTE", "SIM requires PIN but LTE_PIN not configured");
+      return false;
+    }
+  } else if (pinResponse.indexOf("+CPIN: READY") >= 0) {
+    LOG_I("LTE", "SIM ready (no PIN required)");
+  } else {
+    LOG_E("LTE", "Unexpected SIM status: %s", pinResponse.c_str());
     return false;
   }
   

@@ -25,8 +25,12 @@
 // LTE MODEM CONFIGURATION
 // ============================================
 #define LTE_BAUD_RATE         115200
-#define LTE_APN               "your.apn.here"  // Replace with your carrier's APN
+#define LTE_APN               "internet.ht.ht"          // HT Mobile (Croatia) APN
+#define LTE_PIN               "5576"                   // SIM PIN (optional, set to "" if no PIN)
 #define API_ENDPOINT          "http://yourserver.com"  // Replace with your server
+// SIM Info (for reference):
+// IMEI: 97232302079745
+// Phone: +385 97 684 9343
 
 // ============================================
 // TIMING CONFIGURATION
