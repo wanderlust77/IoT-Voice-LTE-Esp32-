@@ -107,23 +107,44 @@ void setup() {
   LOG_I("Main", "Initializing button...");
   button.init(PIN_BUTTON, 2000, 50);  // 2s long press, 50ms debounce
   LOG_I("Main", "NOTE: GPIO34 requires EXTERNAL pull-up resistor!");
+  Serial.flush();  // Ensure message is sent
   
   // Initialize NFC
   LOG_I("Main", "Initializing NFC...");
-  if (!nfc.init(PIN_NFC_SDA, PIN_NFC_SCL, PIN_NFC_IRQ, PIN_NFC_RST)) {
+  Serial.flush();
+  unsigned long nfcStartTime = millis();
+  bool nfcSuccess = nfc.init(PIN_NFC_SDA, PIN_NFC_SCL, PIN_NFC_IRQ, PIN_NFC_RST);
+  unsigned long nfcDuration = millis() - nfcStartTime;
+  Logger::printf(LOG_INFO, "Main", "NFC init took %lu ms", nfcDuration);
+  
+  if (!nfcSuccess) {
     LOG_E("Main", "NFC init failed!");
     LOG_E("Main", "Check: 1) I2C wiring, 2) PN532 power, 3) I2C address");
-    currentState = STATE_ERROR;
-    return;
+    LOG_E("Main", "You can continue without NFC for audio testing");
+    // Don't return - allow audio testing even if NFC fails
+    // currentState = STATE_ERROR;
+    // return;
+  } else {
+    LOG_I("Main", "NFC initialized successfully");
   }
+  Serial.flush();
   
   // Initialize Audio
   LOG_I("Main", "Initializing audio...");
-  if (!audio.init(PIN_I2S_BCLK, PIN_I2S_LRCLK, PIN_I2S_MIC_DATA, PIN_I2S_AMP_DATA)) {
+  Serial.flush();
+  unsigned long audioStartTime = millis();
+  bool audioSuccess = audio.init(PIN_I2S_BCLK, PIN_I2S_LRCLK, PIN_I2S_MIC_DATA, PIN_I2S_AMP_DATA);
+  unsigned long audioDuration = millis() - audioStartTime;
+  Logger::printf(LOG_INFO, "Main", "Audio init took %lu ms", audioDuration);
+  
+  if (!audioSuccess) {
     LOG_E("Main", "Audio init failed!");
     currentState = STATE_ERROR;
     return;
+  } else {
+    LOG_I("Main", "Audio initialized successfully");
   }
+  Serial.flush();
   
   LOG_I("Main", "========================================");
   LOG_I("Main", "Initialization complete!");
