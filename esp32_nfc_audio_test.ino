@@ -41,7 +41,11 @@ ErrorCode lastError = ERROR_NONE;
 // ============================================
 // AUDIO BUFFER (LOCAL STORAGE)
 // ============================================
-#define MAX_AUDIO_SAMPLES  (SAMPLE_RATE * 5)  // 5 seconds max at 16kHz
+// Note: If allocation fails, reduce this value:
+//   * 3 seconds = 96KB (recommended)
+//   * 2 seconds = 64KB (if 3s fails)
+//   * 1 second  = 32KB (minimal)
+#define MAX_AUDIO_SAMPLES  (SAMPLE_RATE * 3)  // 3 seconds max at 16kHz (96KB)
 int16_t* audioBuffer = nullptr;
 size_t audioBufferSize = 0;
 size_t recordedSamples = 0;
@@ -73,15 +77,31 @@ void setup() {
   
   // Allocate audio buffer
   LOG_I("Main", "Allocating audio buffer...");
-  audioBuffer = (int16_t*)malloc(MAX_AUDIO_SAMPLES * sizeof(int16_t));
-  if (!audioBuffer) {
-    LOG_E("Main", "Failed to allocate audio buffer!");
+  size_t bufferBytes = MAX_AUDIO_SAMPLES * sizeof(int16_t);
+  size_t freeHeap = ESP.getFreeHeap();
+  Logger::printf(LOG_INFO, "Main", "Free heap: %d bytes", freeHeap);
+  Logger::printf(LOG_INFO, "Main", "Requesting: %d bytes (%d samples)", 
+                 bufferBytes, MAX_AUDIO_SAMPLES);
+  
+  if (freeHeap < bufferBytes + 10000) {  // Leave 10KB safety margin
+    LOG_E("Main", "Insufficient heap! Need %d bytes, have %d bytes", bufferBytes, freeHeap);
     currentState = STATE_ERROR;
     return;
   }
+  
+  audioBuffer = (int16_t*)malloc(bufferBytes);
+  if (!audioBuffer) {
+    LOG_E("Main", "malloc() failed! Heap may be fragmented.");
+    Logger::printf(LOG_ERROR, "Main", "Free heap: %d bytes, Min free: %d bytes", 
+                   ESP.getFreeHeap(), ESP.getMinFreeHeap());
+    currentState = STATE_ERROR;
+    return;
+  }
+  
   audioBufferSize = MAX_AUDIO_SAMPLES;
-  Logger::printf(LOG_INFO, "Main", "Audio buffer: %d samples (%.1f seconds max)", 
-                 audioBufferSize, (float)audioBufferSize / SAMPLE_RATE);
+  Logger::printf(LOG_INFO, "Main", "Audio buffer allocated: %d samples (%.1f seconds, %d bytes)", 
+                 audioBufferSize, (float)audioBufferSize / SAMPLE_RATE, bufferBytes);
+  Logger::printf(LOG_INFO, "Main", "Remaining heap: %d bytes", ESP.getFreeHeap());
   
   // Initialize button
   LOG_I("Main", "Initializing button...");
