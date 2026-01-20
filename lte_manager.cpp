@@ -29,6 +29,9 @@ bool LTEManager::init(uint8_t txPin, uint8_t rxPin, uint8_t pwrkeyPin, uint8_t r
   modemSerial = &Serial2;
   modemSerial->begin(baudRate, SERIAL_8N1, rxPin, txPin);
   
+  // Log UART configuration
+  Logger::printf(LOG_INFO, "LTE", "UART: RX=GPIO%d, TX=GPIO%d, Baud=%d", rxPin, txPin, baudRate);
+  
   // Clear any pending data
   clearSerialBuffer();
   
@@ -47,29 +50,45 @@ bool LTEManager::powerOn() {
     return false;
   }
   
-  LOG_I("LTE", "Powering on modem...");
+  LOG_I("LTE", "Checking if modem is already on...");
+  
+  // First, check if modem is already powered on
+  clearSerialBuffer();
+  for (int i = 0; i < 3; i++) {
+    if (sendATCommand("AT", "OK", 1000)) {
+      powered = true;
+      LOG_I("LTE", "Modem already powered on");
+      return true;
+    }
+    delay(500);
+  }
+  
+  // Modem not responding - power it on
+  LOG_I("LTE", "Modem off, powering on...");
   
   // Pulse PWRKEY low for 1.5 seconds
   digitalWrite(pinPwrkey, LOW);
   delay(1500);
   digitalWrite(pinPwrkey, HIGH);
   
-  // Wait for modem to boot (5 seconds)
-  LOG_I("LTE", "Waiting for modem boot...");
-  delay(5000);
+  // Wait for modem to boot (LTE modems can take 10-15 seconds)
+  LOG_I("LTE", "Waiting for modem boot (up to 15s)...");
   
-  // Test communication
-  clearSerialBuffer();
-  for (int i = 0; i < 3; i++) {
+  // Try AT command every 2 seconds for up to 15 seconds
+  for (int attempt = 0; attempt < 8; attempt++) {
+    delay(2000);
+    Logger::printf(LOG_INFO, "LTE", "Boot check %d/8...", attempt + 1);
+    
+    clearSerialBuffer();
     if (sendATCommand("AT", "OK", 2000)) {
       powered = true;
-      LOG_I("LTE", "Modem powered on successfully");
+      Logger::printf(LOG_INFO, "LTE", "Modem responded after %d seconds", (attempt + 1) * 2);
       return true;
     }
-    delay(1000);
   }
   
-  LOG_E("LTE", "Failed to communicate with modem");
+  LOG_E("LTE", "Failed to communicate with modem after power-on");
+  LOG_I("LTE", "Check: 1) UART wiring, 2) Modem power (5V), 3) TX/RX not swapped");
   return false;
 }
 
@@ -397,14 +416,23 @@ void LTEManager::clearSerialBuffer() {
 String LTEManager::readSerial(uint32_t timeout_ms) {
   String result = "";
   unsigned long startTime = millis();
+  int bytesReceived = 0;
   
   while (millis() - startTime < timeout_ms) {
     while (modemSerial->available()) {
       char c = modemSerial->read();
       result += c;
+      bytesReceived++;
       startTime = millis();  // Reset timeout on data received
     }
     delay(10);
+  }
+  
+  // Debug: show if we received any bytes at all
+  if (bytesReceived > 0) {
+    Logger::printf(LOG_DEBUG, "LTE", "Received %d bytes", bytesReceived);
+  } else {
+    Logger::printf(LOG_DEBUG, "LTE", "No data received (timeout %dms)", timeout_ms);
   }
   
   return result;
