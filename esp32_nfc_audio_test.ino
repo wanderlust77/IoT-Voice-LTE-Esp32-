@@ -35,16 +35,8 @@ AudioManager audio;
 // ============================================
 // STATE MACHINE
 // ============================================
-enum TestState {
-  STATE_IDLE,
-  STATE_NFC_READ,
-  STATE_RECORDING,
-  STATE_PLAYING,
-  STATE_ERROR
-};
-
-TestState currentState = STATE_IDLE;
-ErrorCode lastError = ERR_NONE;
+AppState currentState = STATE_IDLE;
+ErrorCode lastError = ERROR_NONE;
 
 // ============================================
 // AUDIO BUFFER (LOCAL STORAGE)
@@ -93,16 +85,12 @@ void setup() {
   
   // Initialize button
   LOG_I("Main", "Initializing button...");
-  if (!button.init(PIN_BUTTON)) {
-    LOG_E("Main", "Button init failed!");
-    currentState = STATE_ERROR;
-    return;
-  }
+  button.init(PIN_BUTTON, 2000, 50);  // 2s long press, 50ms debounce
   LOG_I("Main", "NOTE: GPIO34 requires EXTERNAL pull-up resistor!");
   
   // Initialize NFC
   LOG_I("Main", "Initializing NFC...");
-  if (!nfc.init(PIN_NFC_IRQ, PIN_NFC_RST)) {
+  if (!nfc.init(PIN_NFC_SDA, PIN_NFC_SCL, PIN_NFC_IRQ, PIN_NFC_RST)) {
     LOG_E("Main", "NFC init failed!");
     LOG_E("Main", "Check: 1) I2C wiring, 2) PN532 power, 3) I2C address");
     currentState = STATE_ERROR;
@@ -111,7 +99,7 @@ void setup() {
   
   // Initialize Audio
   LOG_I("Main", "Initializing audio...");
-  if (!audio.init(PIN_I2S_BCLK, PIN_I2S_LRCLK, PIN_I2S_MIC_DATA, PIN_I2S_AMP_DATA, SAMPLE_RATE)) {
+  if (!audio.init(PIN_I2S_BCLK, PIN_I2S_LRCLK, PIN_I2S_MIC_DATA, PIN_I2S_AMP_DATA)) {
     LOG_E("Main", "Audio init failed!");
     currentState = STATE_ERROR;
     return;
@@ -133,12 +121,20 @@ void setup() {
 // ============================================
 // MAIN LOOP
 // ============================================
+// Helper function to format UID
+void formatUIDString(const uint8_t* uid, uint8_t length, char* buffer) {
+  for (uint8_t i = 0; i < length; i++) {
+    sprintf(buffer + (i * 3), "%02X", uid[i]);
+    if (i < length - 1) {
+      buffer[i * 3 + 2] = ':';
+    }
+  }
+  buffer[length * 3 - 1] = '\0';
+}
+
 void loop() {
   // Update button state
   button.update();
-  
-  // Check for button actions
-  ButtonAction action = button.getAction();
   
   // State machine
   switch (currentState) {
@@ -155,12 +151,12 @@ void loop() {
         if (nfc.readUID(nfcUID, &nfcUIDLength, 0)) {  // 0 = non-blocking
           // NFC tag detected!
           char uidStr[32];
-          nfc.formatUID(nfcUID, nfcUIDLength, uidStr, sizeof(uidStr));
+          formatUIDString(nfcUID, nfcUIDLength, uidStr);
           LOG_I("Main", "========================================");
           Logger::printf(LOG_INFO, "Main", "NFC Tag Detected: %s", uidStr);
           LOG_I("Main", "Press button to record or playback");
           LOG_I("Main", "========================================");
-          currentState = STATE_NFC_READ;
+          currentState = STATE_READING_NFC;
         }
       }
       break;
@@ -169,16 +165,16 @@ void loop() {
     // ----------------------------------------
     // NFC READ STATE - Waiting for button
     // ----------------------------------------
-    case STATE_NFC_READ: {
-      if (action == BTN_SHORT_PRESS) {
+    case STATE_READING_NFC: {
+      if (button.wasShortPress()) {
         // Start recording
         LOG_I("Main", "========================================");
         LOG_I("Main", "Recording audio (3 seconds)...");
         LOG_I("Main", "Speak into microphone!");
         LOG_I("Main", "========================================");
         
-        if (!audio.configureForRecording()) {
-          LOG_E("Main", "Failed to configure audio for recording");
+        if (!audio.startRecording(SAMPLE_RATE)) {
+          LOG_E("Main", "Failed to start audio recording");
           currentState = STATE_ERROR;
           break;
         }
@@ -187,18 +183,19 @@ void loop() {
         recordingStartTime = millis();
         currentState = STATE_RECORDING;
       }
-      else if (action == BTN_LONG_PRESS) {
+      else if (button.wasLongPress()) {
         // Play back recorded audio
         if (recordedSamples == 0) {
           LOG_W("Main", "No audio recorded yet!");
         } else {
           LOG_I("Main", "========================================");
-          Logger::printf(LOG_INFO, "Main", "Playing back %d samples (%.1f seconds)...", 
-                        recordedSamples, (float)recordedSamples / SAMPLE_RATE);
+          size_t sampleBytes = recordedSamples * sizeof(int16_t);
+          Logger::printf(LOG_INFO, "Main", "Playing back %d samples (%d bytes, %.1f seconds)...", 
+                        recordedSamples, sampleBytes, (float)recordedSamples / SAMPLE_RATE);
           LOG_I("Main", "========================================");
           
-          if (!audio.configureForPlayback()) {
-            LOG_E("Main", "Failed to configure audio for playback");
+          if (!audio.startPlayback(SAMPLE_RATE)) {
+            LOG_E("Main", "Failed to start audio playback");
             currentState = STATE_ERROR;
             break;
           }
@@ -209,14 +206,16 @@ void loop() {
       }
       
       // Timeout after 10 seconds without button press
-      static unsigned long nfcReadTime = 0;
-      if (nfcReadTime == 0) {
-        nfcReadTime = millis();
-      }
-      if (millis() - nfcReadTime > 10000) {
-        LOG_I("Main", "NFC session timeout, returning to idle");
-        nfcReadTime = 0;
-        currentState = STATE_IDLE;
+      {
+        static unsigned long nfcReadTime = 0;
+        if (nfcReadTime == 0) {
+          nfcReadTime = millis();
+        }
+        if (millis() - nfcReadTime > 10000) {
+          LOG_I("Main", "NFC session timeout, returning to idle");
+          nfcReadTime = 0;
+          currentState = STATE_IDLE;
+        }
       }
       break;
     }
@@ -229,10 +228,13 @@ void loop() {
       const uint32_t RECORD_DURATION_MS = 3000;
       
       if (millis() - recordingStartTime < RECORD_DURATION_MS) {
-        // Read samples from microphone
-        size_t samplesRead = audio.readSamples(audioBuffer + recordedSamples, 
-                                               audioBufferSize - recordedSamples);
-        recordedSamples += samplesRead;
+        // Read bytes from microphone
+        size_t bytesAvailable = (audioBufferSize - recordedSamples) * sizeof(int16_t);
+        if (bytesAvailable > 0) {
+          uint8_t* bufferPtr = (uint8_t*)(audioBuffer + recordedSamples);
+          size_t bytesRead = audio.readRecordedData(bufferPtr, bytesAvailable);
+          recordedSamples += bytesRead / sizeof(int16_t);
+        }
         
         // Progress indicator every 500ms
         static unsigned long lastProgress = 0;
@@ -243,12 +245,13 @@ void loop() {
         }
       } else {
         // Recording complete
+        audio.stopRecording();
         LOG_I("Main", "========================================");
         Logger::printf(LOG_INFO, "Main", "Recording complete! Captured %d samples", recordedSamples);
         logHeapStatus();
         LOG_I("Main", "Long-press button to play back");
         LOG_I("Main", "========================================");
-        currentState = STATE_NFC_READ;
+        currentState = STATE_READING_NFC;
       }
       break;
     }
@@ -257,17 +260,22 @@ void loop() {
     // PLAYING STATE
     // ----------------------------------------
     case STATE_PLAYING: {
-      // Calculate expected playback duration
-      uint32_t playbackDuration = (recordedSamples * 1000) / SAMPLE_RATE;
-      
-      if (millis() - playbackStartTime < playbackDuration + 500) {  // +500ms buffer
-        // Write samples to amplifier
+      // Write all audio data
+      {
         static size_t playbackIndex = 0;
+        static bool playbackStarted = false;
+        
+        if (!playbackStarted) {
+          playbackIndex = 0;
+          playbackStarted = true;
+        }
         
         if (playbackIndex < recordedSamples) {
-          size_t samplesToWrite = min((size_t)256, recordedSamples - playbackIndex);
-          size_t samplesWritten = audio.writeSamples(audioBuffer + playbackIndex, samplesToWrite);
-          playbackIndex += samplesWritten;
+          size_t bytesRemaining = (recordedSamples - playbackIndex) * sizeof(int16_t);
+          size_t bytesToWrite = min(bytesRemaining, (size_t)512);  // Write in chunks
+          uint8_t* dataPtr = (uint8_t*)(audioBuffer + playbackIndex);
+          size_t bytesWritten = audio.writePlaybackData(dataPtr, bytesToWrite);
+          playbackIndex += bytesWritten / sizeof(int16_t);
           
           // Progress indicator
           static unsigned long lastProgress = 0;
@@ -276,14 +284,16 @@ void loop() {
             float progress = (float)playbackIndex / recordedSamples * 100.0f;
             Logger::printf(LOG_INFO, "Main", "Playback... %.0f%%", progress);
           }
+        } else {
+          // Playback complete
+          audio.stopPlayback();
+          playbackStarted = false;
+          LOG_I("Main", "========================================");
+          LOG_I("Main", "Playback complete!");
+          LOG_I("Main", "Short-press to record again");
+          LOG_I("Main", "========================================");
+          currentState = STATE_READING_NFC;
         }
-      } else {
-        // Playback complete
-        LOG_I("Main", "========================================");
-        LOG_I("Main", "Playback complete!");
-        LOG_I("Main", "Short-press to record again");
-        LOG_I("Main", "========================================");
-        currentState = STATE_NFC_READ;
       }
       break;
     }
