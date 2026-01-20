@@ -133,7 +133,7 @@ bool LTEManager::checkNetwork(uint32_t timeout_ms) {
   } else if (pinResponse.indexOf("+CPIN: READY") >= 0) {
     LOG_I("LTE", "SIM ready (no PIN required)");
   } else {
-    LOG_E("LTE", "Unexpected SIM status: %s", pinResponse.c_str());
+    Logger::printf(LOG_ERROR, "LTE", "Unexpected SIM status: %s", pinResponse.c_str());
     return false;
   }
   
