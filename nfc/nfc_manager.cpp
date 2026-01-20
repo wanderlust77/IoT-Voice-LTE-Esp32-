@@ -8,10 +8,32 @@
 #include "../utils/logger.h"
 
 // ============================================
+// CONSTRUCTOR
+// ============================================
+NFCManager::NFCManager() {
+  nfc = nullptr;
+  initialized = false;
+  pinIrq = 0;
+  pinRst = 0;
+}
+
+// ============================================
+// DESTRUCTOR
+// ============================================
+NFCManager::~NFCManager() {
+  if (nfc != nullptr) {
+    delete nfc;
+    nfc = nullptr;
+  }
+}
+
+// ============================================
 // INITIALIZE NFC READER
 // ============================================
 bool NFCManager::init(uint8_t sdaPin, uint8_t sclPin, uint8_t irqPin, uint8_t rstPin) {
   initialized = false;
+  pinIrq = irqPin;
+  pinRst = rstPin;
   
   LOG_I("NFC", "Initializing PN532...");
   
@@ -19,13 +41,20 @@ bool NFCManager::init(uint8_t sdaPin, uint8_t sclPin, uint8_t irqPin, uint8_t rs
   Wire.begin(sdaPin, sclPin);
   
   // Initialize PN532 (using I2C constructor)
-  nfc = Adafruit_PN532(irqPin, rstPin);
-  nfc.begin();
+  nfc = new Adafruit_PN532(irqPin, rstPin);
+  if (nfc == nullptr) {
+    LOG_E("NFC", "Failed to allocate PN532 object");
+    return false;
+  }
+  
+  nfc->begin();
   
   // Check for PN532 board
-  uint32_t versiondata = nfc.getFirmwareVersion();
+  uint32_t versiondata = nfc->getFirmwareVersion();
   if (!versiondata) {
     LOG_E("NFC", "PN532 not found! Check wiring.");
+    delete nfc;
+    nfc = nullptr;
     return false;
   }
   
@@ -34,7 +63,7 @@ bool NFCManager::init(uint8_t sdaPin, uint8_t sclPin, uint8_t irqPin, uint8_t rs
                  (versiondata >> 16) & 0xFF, (versiondata >> 8) & 0xFF);
   
   // Configure board to read RFID tags
-  nfc.SAMConfig();
+  nfc->SAMConfig();
   
   initialized = true;
   LOG_I("NFC", "PN532 initialized successfully");
@@ -80,7 +109,7 @@ bool NFCManager::readUID(uint8_t* uid, uint8_t* length, uint32_t timeout_ms) {
 // CHECK IF CARD IS PRESENT
 // ============================================
 bool NFCManager::isCardPresent() {
-  if (!initialized) {
+  if (!initialized || nfc == nullptr) {
     return false;
   }
   
@@ -88,17 +117,17 @@ bool NFCManager::isCardPresent() {
   uint8_t uidLength;
   
   // Quick non-blocking check
-  return nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, 0);
+  return nfc->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, 0);
 }
 
 // ============================================
 // GET FIRMWARE VERSION
 // ============================================
 uint32_t NFCManager::getFirmwareVersion() {
-  if (!initialized) {
+  if (!initialized || nfc == nullptr) {
     return 0;
   }
-  return nfc.getFirmwareVersion();
+  return nfc->getFirmwareVersion();
 }
 
 // ============================================

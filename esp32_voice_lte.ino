@@ -212,7 +212,7 @@ void loop() {
     // ========================================
     // FETCH AUDIO STATE
     // ========================================
-    case STATE_FETCH_AUDIO:
+    case STATE_FETCH_AUDIO: {
       // Enter state
       if (stateStartTime == now) {
         LOG_I("Main", "Fetching audio from server...");
@@ -250,6 +250,7 @@ void loop() {
         }
       }
       break;
+    }
     
     // ========================================
     // PLAYING STATE
@@ -282,7 +283,7 @@ void loop() {
     // ========================================
     // RECORDING STATE
     // ========================================
-    case STATE_RECORDING:
+    case STATE_RECORDING: {
       // Enter state
       if (stateStartTime == now) {
         LOG_I("Main", "Starting recording...");
@@ -344,11 +345,12 @@ void loop() {
         transitionTo(STATE_UPLOADING);
       }
       break;
+    }
     
     // ========================================
     // UPLOADING STATE
     // ========================================
-    case STATE_UPLOADING:
+    case STATE_UPLOADING: {
       // Enter state
       if (stateStartTime == now) {
         LOG_I("Main", "Uploading audio to server...");
@@ -379,6 +381,7 @@ void loop() {
         }
       }
       break;
+    }
     
     // ========================================
     // ERROR STATE

@@ -16,6 +16,12 @@
 // ============================================
 class NFCManager {
 public:
+  // Constructor
+  NFCManager();
+  
+  // Destructor
+  ~NFCManager();
+  
   // Initialize NFC reader
   bool init(uint8_t sdaPin, uint8_t sclPin, uint8_t irqPin, uint8_t rstPin);
   
@@ -33,8 +39,10 @@ public:
   uint32_t getFirmwareVersion();
 
 private:
-  Adafruit_PN532 nfc;
+  Adafruit_PN532* nfc;
   bool initialized;
+  uint8_t pinIrq;
+  uint8_t pinRst;
   
   // Helper to format UID as hex string
   void formatUID(const uint8_t* uid, uint8_t length, char* buffer, size_t bufferSize);
