@@ -84,7 +84,7 @@ void setup() {
                  bufferBytes, MAX_AUDIO_SAMPLES);
   
   if (freeHeap < bufferBytes + 10000) {  // Leave 10KB safety margin
-    LOG_E("Main", "Insufficient heap! Need %d bytes, have %d bytes", bufferBytes, freeHeap);
+    Logger::printf(LOG_ERROR, "Main", "Insufficient heap! Need %d bytes, have %d bytes", bufferBytes, freeHeap);
     currentState = STATE_ERROR;
     return;
   }
