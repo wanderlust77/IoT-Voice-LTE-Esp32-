@@ -85,10 +85,10 @@ bool NFCManager::readUID(uint8_t* uid, uint8_t* length, uint32_t timeout_ms) {
   
   if (timeout_ms == 0) {
     // Non-blocking: just try once
-    success = nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, 0);
+    success = nfc->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, 0);
   } else {
     // Blocking with timeout
-    success = nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, timeout_ms);
+    success = nfc->readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, timeout_ms);
   }
   
   if (success) {
