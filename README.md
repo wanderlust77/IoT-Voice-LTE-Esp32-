@@ -293,24 +293,21 @@ INIT → IDLE → READING_NFC → FETCH_AUDIO → PLAYING → IDLE
               READING_NFC → RECORDING → UPLOADING → IDLE
 ```
 
-### Module Structure
+### File Structure
 ```
 esp32_voice_lte/
 ├── esp32_voice_lte.ino     # Main state machine
 ├── config.h                 # User configuration
 ├── hardware_defs.h          # Pin definitions
 ├── app_state.h              # State definitions
-├── utils/
-│   ├── logger.h/cpp         # Debug logging
-├── input/
-│   ├── button_handler.h/cpp # Button debouncing
-├── nfc/
-│   ├── nfc_manager.h/cpp    # NFC interface
-├── audio/
-│   ├── audio_manager.h/cpp  # I2S audio
-└── lte/
-    └── lte_manager.h/cpp    # LTE modem
+├── logger.h/cpp             # Debug logging
+├── button_handler.h/cpp     # Button debouncing
+├── nfc_manager.h/cpp        # NFC interface
+├── audio_manager.h/cpp      # I2S audio
+└── lte_manager.h/cpp        # LTE modem
 ```
+
+**Note:** All files are in the root sketch folder for Arduino IDE compatibility.
 
 ### Memory Usage
 - Audio buffers: 32 KB (configurable)

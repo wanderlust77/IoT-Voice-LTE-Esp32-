@@ -5,8 +5,8 @@
  */
 
 #include "audio_manager.h"
-#include "../utils/logger.h"
-#include "../config.h"
+#include "logger.h"
+#include "config.h"
 
 // I2S port number (ESP32 has 2 I2S ports: 0 and 1)
 #define I2S_PORT I2S_NUM_0

@@ -5,8 +5,8 @@
  */
 
 #include "lte_manager.h"
-#include "../utils/logger.h"
-#include "../config.h"
+#include "logger.h"
+#include "config.h"
 
 // ============================================
 // INITIALIZE LTE MANAGER

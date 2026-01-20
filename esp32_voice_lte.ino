@@ -15,11 +15,11 @@
 #include "hardware_defs.h"
 #include "config.h"
 #include "app_state.h"
-#include "utils/logger.h"
-#include "input/button_handler.h"
-#include "nfc/nfc_manager.h"
-#include "audio/audio_manager.h"
-#include "lte/lte_manager.h"
+#include "logger.h"
+#include "button_handler.h"
+#include "nfc_manager.h"
+#include "audio_manager.h"
+#include "lte_manager.h"
 
 // ============================================
 // GLOBAL OBJECTS

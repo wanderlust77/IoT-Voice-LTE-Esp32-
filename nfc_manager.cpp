@@ -5,7 +5,7 @@
  */
 
 #include "nfc_manager.h"
-#include "../utils/logger.h"
+#include "logger.h"
 
 // ============================================
 // CONSTRUCTOR
