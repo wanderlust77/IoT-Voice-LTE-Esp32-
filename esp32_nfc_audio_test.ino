@@ -51,6 +51,14 @@ size_t audioBufferSize = 0;
 size_t recordedSamples = 0;
 
 // ============================================
+// AUDIO VOLUME CONTROL
+// ============================================
+// Software gain multiplier (1.0 = normal, 2.0 = 2x louder, etc.)
+// MAX98357A with floating GAIN pin = 15dB hardware gain
+// Increase this if audio is too quiet
+#define AUDIO_GAIN_MULTIPLIER  3.0f  // 3x software gain (adjust as needed)
+
+// ============================================
 // NFC DATA
 // ============================================
 uint8_t nfcUID[7];
@@ -289,8 +297,28 @@ void loop() {
         audio.stopRecording();
         LOG_I("Main", "========================================");
         Logger::printf(LOG_INFO, "Main", "Recording complete! Captured %d samples", recordedSamples);
+        
+        // Check if audio was actually captured (not silence)
+        int32_t maxSample = 0;
+        int32_t minSample = 0;
+        for (size_t i = 0; i < recordedSamples; i++) {
+          if (audioBuffer[i] > maxSample) maxSample = audioBuffer[i];
+          if (audioBuffer[i] < minSample) minSample = audioBuffer[i];
+        }
+        Logger::printf(LOG_INFO, "Main", "Audio range: %d to %d (max possible: ±32768)", minSample, maxSample);
+        
+        if (maxSample == 0 && minSample == 0) {
+          LOG_W("Main", "WARNING: All samples are zero! Microphone may not be working.");
+        } else {
+          int32_t absMax = (maxSample > 0) ? maxSample : -maxSample;
+          int32_t absMin = (minSample > 0) ? minSample : -minSample;
+          int32_t peak = (absMax > absMin) ? absMax : absMin;
+          float peakLevel = (float)peak / 32768.0f * 100.0f;
+          Logger::printf(LOG_INFO, "Main", "Peak level: %.1f%% of maximum", peakLevel);
+        }
+        
         logHeapStatus();
-        LOG_I("Main", "Long-press button to play back");
+        LOG_I("Main", "Long-press button to play back (gain: %.1fx)", AUDIO_GAIN_MULTIPLIER);
         LOG_I("Main", "========================================");
         currentState = STATE_READING_NFC;
       }
@@ -312,10 +340,25 @@ void loop() {
         }
         
         if (playbackIndex < recordedSamples) {
-          size_t bytesRemaining = (recordedSamples - playbackIndex) * sizeof(int16_t);
-          size_t bytesToWrite = min(bytesRemaining, (size_t)512);  // Write in chunks
-          uint8_t* dataPtr = (uint8_t*)(audioBuffer + playbackIndex);
-          size_t bytesWritten = audio.writePlaybackData(dataPtr, bytesToWrite);
+          // Apply software gain and prepare audio chunk
+          size_t samplesToProcess = min((size_t)256, recordedSamples - playbackIndex);
+          static int16_t gainBuffer[256];  // Temporary buffer for gain-adjusted samples
+          
+          // Apply gain multiplier to samples
+          for (size_t i = 0; i < samplesToProcess; i++) {
+            int32_t sample = (int32_t)audioBuffer[playbackIndex + i];
+            sample = (int32_t)(sample * AUDIO_GAIN_MULTIPLIER);
+            
+            // Clamp to 16-bit range to prevent clipping
+            if (sample > 32767) sample = 32767;
+            if (sample < -32768) sample = -32768;
+            
+            gainBuffer[i] = (int16_t)sample;
+          }
+          
+          // Write gain-adjusted samples
+          size_t bytesToWrite = samplesToProcess * sizeof(int16_t);
+          size_t bytesWritten = audio.writePlaybackData((uint8_t*)gainBuffer, bytesToWrite);
           playbackIndex += bytesWritten / sizeof(int16_t);
           
           // Progress indicator
@@ -331,6 +374,10 @@ void loop() {
           playbackStarted = false;
           LOG_I("Main", "========================================");
           LOG_I("Main", "Playback complete!");
+          LOG_I("Main", "Did you feel/hear the audio? If not, try:");
+          LOG_I("Main", "  1. Increase AUDIO_GAIN_MULTIPLIER (currently %.1fx)", AUDIO_GAIN_MULTIPLIER);
+          LOG_I("Main", "  2. Check speaker wiring and connections");
+          LOG_I("Main", "  3. Verify MAX98357A SD pin is HIGH (3.3V)");
           LOG_I("Main", "Short-press to record again");
           LOG_I("Main", "========================================");
           currentState = STATE_READING_NFC;
