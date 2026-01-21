@@ -221,18 +221,32 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
       }
       audioData = (sample32 & 0x01) ? 1 : 0;  // Extract bit 0
     } else {
-      // Normal data - extract using standard method
-      // SPH0645: 18-bit data in upper bits, take upper 16 bits
+      // Normal data - SPH0645LM4H format can vary
+      // Try multiple extraction methods to find the correct one
+      
+      // Method 1: Upper 16 bits (most common: bits 16-31)
       audioData = (int32_t)((int16_t)(sample32 >> 16));
       
-      // If that gives 0 but sample32 is non-zero, try alternative extraction
+      // Method 2: If Method 1 gives 0 but sample32 is non-zero, try bits 14-31
+      // SPH0645 sometimes puts 18-bit data starting at bit 14
       if (audioData == 0 && sample32 != 0) {
-        // Try lower 18 bits
+        // Extract from bits 14-31 (18-bit left-aligned)
+        int32_t upper18 = (sample32 >> 14);
+        // Sign extend if bit 17 is set (18-bit sign bit)
+        if (upper18 & 0x20000) {
+          upper18 |= 0xFFFC0000;  // Sign extend to 32-bit
+        }
+        // Convert 18-bit to 16-bit (shift right by 2)
+        audioData = (int32_t)((int16_t)(upper18 >> 2));
+      }
+      
+      // Method 3: If still 0, try lower 18 bits (bits 0-17)
+      if (audioData == 0 && sample32 != 0) {
         int32_t lower18 = (sample32 & 0x3FFFF);
         if (lower18 & 0x20000) {
           lower18 |= 0xFFFC0000;  // Sign extend
         }
-        audioData = lower18 >> 2;
+        audioData = lower18 >> 2;  // Convert 18-bit to 16-bit
       }
     }
     
@@ -243,31 +257,83 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
     outputBuffer[i] = (int16_t)audioData;
   }
   
-  // Log diagnostics for all-zero case
-  static bool loggedAllZeros = false;
-  if (!loggedAllZeros && samplesRead > 0 && i2sBuffer[0] == 0x00000000) {
-    // Check if ALL samples are zero
-    bool allZeros = true;
-    for (size_t i = 0; i < samplesRead && i < 10; i++) {
-      if (i2sBuffer[i] != 0x00000000) {
-        allZeros = false;
-        break;
+  // Track intermittent zero-data periods for automatic recovery
+  static int consecutiveZeroReads = 0;
+  static int totalReads = 0;
+  static int zeroReads = 0;
+  static unsigned long lastNonZeroTime = 0;
+  
+  totalReads++;
+  
+  // Check if ALL samples in this read are zero
+  bool allZerosThisRead = true;
+  for (size_t i = 0; i < samplesRead && i < 10; i++) {
+    if (i2sBuffer[i] != 0x00000000) {
+      allZerosThisRead = false;
+      lastNonZeroTime = millis();
+      break;
+    }
+  }
+  
+  if (allZerosThisRead) {
+    consecutiveZeroReads++;
+    zeroReads++;
+    
+    // Log warning if we get many consecutive zeros (intermittent issue)
+    if (consecutiveZeroReads == 10) {
+      LOG_W("Audio", "⚠️  Intermittent issue: 10 consecutive zero reads detected");
+      LOG_W("Audio", "Microphone was working but now sending zeros.");
+    } else if (consecutiveZeroReads == 50) {
+      LOG_W("Audio", "⚠️  INTERMITTENT FAILURE: 50 consecutive zero reads!");
+      LOG_W("Audio", "Microphone data stopped. Check: power, wiring, loose connections");
+      LOG_W("Audio", "Attempting automatic I2S restart...");
+      
+      // Automatic recovery: restart I2S
+      if (currentMode == AUDIO_MODE_RECORDING) {
+        uint32_t savedRate = currentSampleRate;
+        shutdownI2S();
+        delay(100);
+        if (reconfigureI2S(AUDIO_MODE_RECORDING, savedRate)) {
+          LOG_I("Audio", "✅ I2S restarted successfully - monitoring for recovery");
+          consecutiveZeroReads = 0;  // Reset counter
+        } else {
+          LOG_E("Audio", "❌ I2S restart failed!");
+        }
       }
     }
-    if (allZeros) {
-      loggedAllZeros = true;
-      LOG_W("Audio", "========================================");
-      LOG_W("Audio", "WARNING: All I2S samples are 0x00000000!");
-      LOG_W("Audio", "I2S clocks are working, but microphone sends no data.");
-      LOG_W("Audio", "");
-      LOG_W("Audio", "TROUBLESHOOTING:");
-      LOG_W("Audio", "1. Measure VDD pin on microphone (should be 3.3V)");
-      LOG_W("Audio", "2. Verify SEL pin is connected to GND (confirmed ✅)");
-      LOG_W("Audio", "3. Check DOUT (GPIO 33) wiring - should connect to mic DOUT");
-      LOG_W("Audio", "4. Verify microphone is not damaged");
-      LOG_W("Audio", "5. Try speaking loudly into microphone");
-      LOG_W("Audio", "========================================");
+  } else {
+    // Got non-zero data - reset counter
+    if (consecutiveZeroReads > 0) {
+      Logger::printf(LOG_INFO, "Audio", "✅ Recovered: Got non-zero data after %d zero reads", consecutiveZeroReads);
+      consecutiveZeroReads = 0;
     }
+  }
+  
+  // Log statistics periodically
+  static unsigned long lastStatsLog = 0;
+  if (millis() - lastStatsLog > 10000) {  // Every 10 seconds
+    lastStatsLog = millis();
+    float zeroPercent = (totalReads > 0) ? (100.0f * zeroReads / totalReads) : 0.0f;
+    unsigned long timeSinceNonZero = (lastNonZeroTime > 0) ? (millis() - lastNonZeroTime) : 0;
+    Logger::printf(LOG_INFO, "Audio", "Stats: %d reads, %.1f%% zeros, %lu ms since last non-zero", 
+                   totalReads, zeroPercent, timeSinceNonZero);
+  }
+  
+  // Log first-time all-zero warning (one-time)
+  static bool loggedAllZeros = false;
+  if (!loggedAllZeros && allZerosThisRead && totalReads == 1) {
+    loggedAllZeros = true;
+    LOG_W("Audio", "========================================");
+    LOG_W("Audio", "WARNING: All I2S samples are 0x00000000!");
+    LOG_W("Audio", "I2S clocks are working, but microphone sends no data.");
+    LOG_W("Audio", "");
+    LOG_W("Audio", "TROUBLESHOOTING:");
+    LOG_W("Audio", "1. Measure VDD pin on microphone (should be 3.3V)");
+    LOG_W("Audio", "2. Verify SEL pin is connected to GND (confirmed ✅)");
+    LOG_W("Audio", "3. Check DOUT (GPIO 33) wiring - should connect to mic DOUT");
+    LOG_W("Audio", "4. Verify microphone is not damaged");
+    LOG_W("Audio", "5. Try speaking loudly into microphone");
+    LOG_W("Audio", "========================================");
   }
   
   // Log first non-zero sample when found
