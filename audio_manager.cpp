@@ -415,7 +415,7 @@ i2s_config_t AudioManager::getRecordingConfig(uint32_t sampleRate) {
     .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
     .dma_buf_count = DMA_BUFFER_COUNT,
     .dma_buf_len = DMA_BUFFER_SIZE,
-    .use_apll = true,  // Enable APLL for better clock generation
+    .use_apll = false,
     .tx_desc_auto_clear = false,
     .fixed_mclk = 0
   };
