@@ -101,15 +101,21 @@ bool AudioManager::startRecording(uint32_t sampleRate) {
   // Clear DMA buffer to avoid reading stale data
   i2s_zero_dma_buffer(I2S_PORT);
   
-  // Wait a bit for microphone to stabilize and start outputting data
-  delay(500);  // Increased delay for microphone to stabilize
+  // ESP32 I2S RX mode: Sometimes LRCLK doesn't start until we start reading
+  // Trigger a dummy read to start the clocks properly
+  uint8_t dummyBuffer[64];
+  size_t bytesRead = 0;
+  i2s_read(I2S_PORT, dummyBuffer, sizeof(dummyBuffer), &bytesRead, 0);  // Non-blocking
+  
+  // Wait for microphone to stabilize and clocks to start
+  delay(500);
   
   LOG_I("Audio", "Recording mode ready");
   Logger::printf(LOG_INFO, "Audio", "I2S configured: %lu Hz, 32-bit, RX mode", sampleRate);
   Logger::printf(LOG_INFO, "Audio", "Pins: BCLK=GPIO%d, LRCLK=GPIO%d, DATA=GPIO%d", 
                  pinBclk, pinLrclk, pinMicData);
   Logger::printf(LOG_INFO, "Audio", "Format: STAND_I2S, Channel: LEFT only");
-  LOG_I("Audio", "NOTE: Verify BCLK and LRCLK are generating clocks!");
+  LOG_I("Audio", "NOTE: Triggered dummy read to start LRCLK");
   return true;
 }
 
@@ -369,12 +375,16 @@ bool AudioManager::reconfigureI2S(AudioMode newMode, uint32_t sampleRate) {
     return false;
   }
   
-  // Start I2S driver explicitly (required for clocks to generate)
-  result = i2s_start(I2S_PORT);
-  if (result != ESP_OK) {
-    Logger::printf(LOG_ERROR, "Audio", "i2s_start failed: %d", result);
-    i2s_driver_uninstall(I2S_PORT);
-    return false;
+  // For RX mode, ESP32 I2S may need explicit start to generate clocks
+  // i2s_driver_install() doesn't always start clocks in RX mode
+  if (newMode == AUDIO_MODE_RECORDING) {
+    result = i2s_start(I2S_PORT);
+    if (result != ESP_OK) {
+      Logger::printf(LOG_ERROR, "Audio", "i2s_start failed: %d", result);
+      i2s_driver_uninstall(I2S_PORT);
+      return false;
+    }
+    Logger::printf(LOG_INFO, "Audio", "I2S RX mode started explicitly");
   }
   
   currentMode = newMode;
@@ -383,6 +393,11 @@ bool AudioManager::reconfigureI2S(AudioMode newMode, uint32_t sampleRate) {
   Logger::printf(LOG_INFO, "Audio", "I2S configured: %lu Hz, mode=%d", sampleRate, newMode);
   Logger::printf(LOG_INFO, "Audio", "I2S pins: BCLK=GPIO%d, LRCLK=GPIO%d, DATA=GPIO%d", 
                  pins.bck_io_num, pins.ws_io_num, pins.data_in_num);
+  
+  // Wait for clocks to stabilize
+  delay(200);
+  Logger::printf(LOG_INFO, "Audio", "I2S driver ready - clocks should be active");
+  
   return true;
 }
 

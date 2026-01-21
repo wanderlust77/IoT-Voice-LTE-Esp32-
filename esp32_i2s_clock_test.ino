@@ -36,8 +36,25 @@ void setup() {
     while(1) delay(1000);
   }
   
-  LOG_I("Main", "I2S started. Waiting for clocks to stabilize...");
-  delay(1000);
+  LOG_I("Main", "I2S started. Starting continuous reads to trigger LRCLK...");
+  
+  // ESP32 I2S RX mode: LRCLK may not toggle until we start reading data
+  // Do continuous reads to trigger clock generation
+  LOG_I("Main", "Triggering I2S reads to start LRCLK...");
+  uint8_t dummyBuffer[512];
+  for (int i = 0; i < 20; i++) {
+    size_t bytesRead = 0;
+    i2s_read(I2S_NUM_0, dummyBuffer, sizeof(dummyBuffer), &bytesRead, 50);  // 50ms timeout
+    if (i % 5 == 0) {
+      Serial.print(".");
+    }
+    delay(20);
+  }
+  Serial.println();
+  LOG_I("Main", "Reads complete - LRCLK should be active now");
+  
+  LOG_I("Main", "Continuous reads done. Waiting for clocks to stabilize...");
+  delay(500);
   Serial.flush();
   
   LOG_I("Main", "");
