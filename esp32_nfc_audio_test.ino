@@ -318,7 +318,7 @@ void loop() {
         }
         
         logHeapStatus();
-        LOG_I("Main", "Long-press button to play back (gain: %.1fx)", AUDIO_GAIN_MULTIPLIER);
+        Logger::printf(LOG_INFO, "Main", "Long-press button to play back (gain: %.1fx)", AUDIO_GAIN_MULTIPLIER);
         LOG_I("Main", "========================================");
         currentState = STATE_READING_NFC;
       }
@@ -375,7 +375,7 @@ void loop() {
           LOG_I("Main", "========================================");
           LOG_I("Main", "Playback complete!");
           LOG_I("Main", "Did you feel/hear the audio? If not, try:");
-          LOG_I("Main", "  1. Increase AUDIO_GAIN_MULTIPLIER (currently %.1fx)", AUDIO_GAIN_MULTIPLIER);
+          Logger::printf(LOG_INFO, "Main", "  1. Increase AUDIO_GAIN_MULTIPLIER (currently %.1fx)", AUDIO_GAIN_MULTIPLIER);
           LOG_I("Main", "  2. Check speaker wiring and connections");
           LOG_I("Main", "  3. Verify MAX98357A SD pin is HIGH (3.3V)");
           LOG_I("Main", "Short-press to record again");
