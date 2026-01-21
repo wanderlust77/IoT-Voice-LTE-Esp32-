@@ -162,120 +162,17 @@ void setup() {
   LOG_I("Main", "========================================");
   LOG_I("Main", "Initialization complete!");
   LOG_I("Main", "");
-  LOG_I("Main", "CONTINUOUS AUDIO DISPLAY MODE");
-  LOG_I("Main", "Starting automatic continuous reading...");
+  LOG_I("Main", "Usage:");
+  LOG_I("Main", "1. Present NFC tag to reader");
+  LOG_I("Main", "2. SHORT press button → Record 3 seconds");
+  LOG_I("Main", "3. LONG press button → Playback recording");
   LOG_I("Main", "========================================");
   
   logHeapStatus();
   
-  // ========================================
-  // I2S CLOCK DIAGNOSTIC TEST
-  // ========================================
-  // Run this BEFORE starting recording to test clocks
-  LOG_I("Main", "");
-  LOG_I("Main", "");
-  LOG_I("Main", "########################################");
-  LOG_I("Main", "##  I2S CLOCK DIAGNOSTIC TEST  ##");
-  LOG_I("Main", "########################################");
-  LOG_I("Main", "");
-  
-  // Start recording first to enable I2S clocks
-  if (!audio.startRecording(SAMPLE_RATE)) {
-    LOG_E("Main", "Failed to start audio recording");
-    currentState = STATE_ERROR;
-    return;
-  }
-  
-  // Wait for I2S to stabilize and clocks to start
-  LOG_I("Main", "Waiting for I2S clocks to stabilize...");
-  delay(1000);  // Increased delay
-  Serial.flush();
-  
-  LOG_I("Main", "");
-  LOG_I("Main", "Starting clock diagnostic test...");
-  LOG_I("Main", "This will take a few seconds...");
-  Serial.flush();
-  delay(500);
-  
-  // Test BCLK (GPIO 26)
-  // Note: Setting pinMode might interfere with I2S, but we need to read it
-  // I2S should have already configured these pins, so we're just reading them
-  LOG_I("Main", "");
-  LOG_I("Main", ">>> Testing BCLK (GPIO 26) <<<");
-  Serial.print("BCLK readings (200 samples): ");
-  int bclkHigh = 0;
-  int bclkLow = 0;
-  for (int i = 0; i < 200; i++) {
-    int val = digitalRead(PIN_I2S_BCLK);
-    if (val == HIGH) bclkHigh++;
-    else bclkLow++;
-    Serial.print(val);
-    delayMicroseconds(5);
-    if (i % 50 == 49) Serial.print(" ");  // Space every 50 readings
-  }
-  Serial.println();
-  Logger::printf(LOG_INFO, "Main", "BCLK: HIGH=%d, LOW=%d", bclkHigh, bclkLow);
-  
-  if (bclkHigh == 0) {
-    LOG_E("Main", "BCLK is stuck LOW - I2S clock not working!");
-  } else if (bclkLow == 0) {
-    LOG_E("Main", "BCLK is stuck HIGH - I2S clock not working!");
-  } else if (bclkHigh < 10 || bclkLow < 10) {
-    LOG_W("Main", "BCLK shows minimal toggling - clock may be slow or not working properly");
-  } else {
-    LOG_I("Main", "BCLK is toggling - clock appears to be working!");
-  }
-  
-  // Test LRCLK (GPIO 25)
-  pinMode(PIN_I2S_LRCLK, INPUT);
-  LOG_I("Main", "Testing LRCLK (GPIO 25)...");
-  Serial.print("LRCLK readings (200 samples): ");
-  int lrclkHigh = 0;
-  int lrclkLow = 0;
-  for (int i = 0; i < 200; i++) {
-    int val = digitalRead(PIN_I2S_LRCLK);
-    if (val == HIGH) lrclkHigh++;
-    else lrclkLow++;
-    Serial.print(val);
-    delayMicroseconds(5);
-    if (i % 50 == 49) Serial.print(" ");  // Space every 50 readings
-  }
-  Serial.println();
-  Logger::printf(LOG_INFO, "Main", "LRCLK: HIGH=%d, LOW=%d", lrclkHigh, lrclkLow);
-  
-  if (lrclkHigh == 0) {
-    LOG_E("Main", "LRCLK is stuck LOW - I2S word clock not working!");
-  } else if (lrclkLow == 0) {
-    LOG_E("Main", "LRCLK is stuck HIGH - I2S word clock not working!");
-  } else if (lrclkHigh < 10 || lrclkLow < 10) {
-    LOG_W("Main", "LRCLK shows minimal toggling - clock may be slow or not working properly");
-  } else {
-    LOG_I("Main", "LRCLK is toggling - word clock appears to be working!");
-  }
-  
-  LOG_I("Main", "");
-  LOG_I("Main", "########################################");
-  LOG_I("Main", "##  END OF CLOCK DIAGNOSTIC TEST  ##");
-  LOG_I("Main", "########################################");
-  LOG_I("Main", "");
-  Serial.flush();
-  delay(1000);  // Pause so user can read the results
-  
-  // Note: We don't need to restart recording - I2S is still running
-  // The pinMode calls above might have interfered, but I2S should recover
-  // If needed, we can restart, but let's see if it works without restart
-  
+  // Start in IDLE state, waiting for NFC tag
+  currentState = STATE_IDLE;
   recordedSamples = 0;
-  recordingStartTime = millis();
-  currentState = STATE_RECORDING;
-  
-  LOG_I("Main", "========================================");
-  LOG_I("Main", "CONTINUOUS AUDIO MONITORING ACTIVE");
-  LOG_I("Main", "Speak into microphone - data will display continuously");
-  LOG_I("Main", "Watch Serial Monitor for real-time audio data");
-  LOG_I("Main", "Press RESET button to stop");
-  LOG_I("Main", "========================================");
-  Serial.println();
 }
 
 // ============================================
@@ -381,88 +278,51 @@ void loop() {
     }
     
     // ----------------------------------------
-    // RECORDING STATE - CONTINUOUS DISPLAY MODE
+    // RECORDING STATE
     // ----------------------------------------
     case STATE_RECORDING: {
-      // Continuous reading mode - no time limit
-      static int16_t displayBuffer[100];  // Buffer for displaying samples
-      static size_t displayIndex = 0;
-      static unsigned long lastDisplay = 0;
-      static unsigned long lastStats = 0;
-      static int readCount = 0;
-      
-      // Read bytes from microphone continuously
-      size_t bytesAvailable = sizeof(displayBuffer);
-      uint8_t* bufferPtr = (uint8_t*)displayBuffer;
+      // Read audio data in chunks
+      static int16_t readBuffer[256];  // Temporary buffer for reading
+      size_t bytesAvailable = sizeof(readBuffer);
+      uint8_t* bufferPtr = (uint8_t*)readBuffer;
       size_t bytesRead = audio.readRecordedData(bufferPtr, bytesAvailable);
       
       if (bytesRead > 0) {
         size_t samplesRead = bytesRead / sizeof(int16_t);
-        readCount++;
         
-        // Display raw samples every 200ms
-        if (millis() - lastDisplay > 200) {
-          lastDisplay = millis();
-          
-          Serial.print("[DATA] Read #");
-          Serial.print(readCount);
-          Serial.print(" - Samples [0..");
-          Serial.print(samplesRead - 1);
-          Serial.print("]: ");
-          
-          for (size_t i = 0; i < samplesRead && i < 20; i++) {  // Show first 20
-            Serial.print(displayBuffer[i]);
-            if (i < samplesRead - 1 && i < 19) Serial.print(", ");
-          }
-          Serial.println();
+        // Copy samples to main buffer
+        if (recordedSamples + samplesRead <= audioBufferSize) {
+          memcpy(&audioBuffer[recordedSamples], readBuffer, bytesRead);
+          recordedSamples += samplesRead;
+        } else {
+          // Buffer full - stop recording
+          LOG_W("Main", "Audio buffer full! Stopping recording.");
+          audio.stopRecording();
+          currentState = STATE_READING_NFC;
+          break;
         }
         
-        // Calculate and display statistics every 500ms
-        if (millis() - lastStats > 500) {
-          lastStats = millis();
-          
-          int32_t chunkMin = 32767;
-          int32_t chunkMax = -32768;
-          int64_t chunkSum = 0;
-          int zeroCount = 0;
-          
-          for (size_t i = 0; i < samplesRead; i++) {
-            int32_t val = displayBuffer[i];
-            if (val < chunkMin) chunkMin = val;
-            if (val > chunkMax) chunkMax = val;
-            chunkSum += (val > 0 ? val : -val);  // Absolute sum
-            if (val == 0) zeroCount++;
-          }
-          
-          int32_t chunkAvg = (samplesRead > 0) ? (chunkSum / samplesRead) : 0;
-          float zeroPercent = (samplesRead > 0) ? ((float)zeroCount / samplesRead * 100.0f) : 0.0f;
-          
-          Logger::printf(LOG_INFO, "Main", "=== Audio Stats (read #%d) ===", readCount);
-          Logger::printf(LOG_INFO, "Main", "Range: %d to %d (max: ±32768)", chunkMin, chunkMax);
-          Logger::printf(LOG_INFO, "Main", "Avg abs: %d, Zero samples: %d (%.1f%%)", 
-                        chunkAvg, zeroCount, zeroPercent);
-          
-          if (chunkMax == 0 && chunkMin == 0) {
-            LOG_W("Main", "WARNING: All samples are ZERO - microphone not sending data!");
-          } else if (chunkAvg < 10) {
-            LOG_W("Main", "WARNING: Very low audio levels - check microphone wiring!");
-          } else {
-            float peakPercent = ((float)((chunkMax > -chunkMin) ? chunkMax : -chunkMin) / 32768.0f) * 100.0f;
-            Logger::printf(LOG_INFO, "Main", "Peak level: %.1f%% - Audio looks good!", peakPercent);
-          }
-          Serial.println();
-        }
-      } else {
-        // No data available - log occasionally
-        static int noDataCount = 0;
-        noDataCount++;
-        if (noDataCount == 1 || noDataCount % 50 == 0) {
-          Logger::printf(LOG_INFO, "Main", "No I2S data available (read attempt #%d)", noDataCount);
+        // Progress indicator
+        unsigned long elapsed = millis() - recordingStartTime;
+        float progress = (float)elapsed / 3000.0f * 100.0f;  // 3 seconds = 100%
+        static unsigned long lastProgress = 0;
+        if (millis() - lastProgress > 500) {
+          lastProgress = millis();
+          Logger::printf(LOG_INFO, "Main", "Recording... %.1fs / 3.0s (samples: %d)", 
+                        elapsed / 1000.0f, recordedSamples);
         }
       }
       
-      // Continue recording indefinitely (no timeout)
-      // User can reset to stop
+      // Check if 3 seconds have elapsed
+      if (millis() - recordingStartTime >= 3000) {
+        // Recording complete
+        audio.stopRecording();
+        LOG_I("Main", "========================================");
+        Logger::printf(LOG_INFO, "Main", "Recording complete! Captured %d samples", recordedSamples);
+        LOG_I("Main", "Long-press button to play back (gain: %.1fx)", AUDIO_GAIN_MULTIPLIER);
+        LOG_I("Main", "========================================");
+        currentState = STATE_READING_NFC;
+      }
       break;
     }
     
