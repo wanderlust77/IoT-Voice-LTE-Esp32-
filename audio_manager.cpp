@@ -303,9 +303,8 @@ i2s_config_t AudioManager::getRecordingConfig(uint32_t sampleRate) {
     .sample_rate = sampleRate,
     .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,  // SPH0645 outputs 32-bit!
     .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-    // SPH0645LM4H uses I2S format with MSB first
-    // Try STAND_I2S first, but may need I2S_COMM_FORMAT_STAND_MSB
-    .communication_format = (i2s_comm_format_t)(I2S_COMM_FORMAT_STAND_I2S | I2S_COMM_FORMAT_I2S),
+    // SPH0645LM4H uses standard I2S format
+    .communication_format = I2S_COMM_FORMAT_STAND_I2S,
     .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
     .dma_buf_count = DMA_BUFFER_COUNT,
     .dma_buf_len = DMA_BUFFER_SIZE,
@@ -370,10 +369,20 @@ bool AudioManager::reconfigureI2S(AudioMode newMode, uint32_t sampleRate) {
     return false;
   }
   
+  // Start I2S driver explicitly (required for clocks to generate)
+  result = i2s_start(I2S_PORT);
+  if (result != ESP_OK) {
+    Logger::printf(LOG_ERROR, "Audio", "i2s_start failed: %d", result);
+    i2s_driver_uninstall(I2S_PORT);
+    return false;
+  }
+  
   currentMode = newMode;
   currentSampleRate = sampleRate;
   
   Logger::printf(LOG_INFO, "Audio", "I2S configured: %lu Hz, mode=%d", sampleRate, newMode);
+  Logger::printf(LOG_INFO, "Audio", "I2S pins: BCLK=GPIO%d, LRCLK=GPIO%d, DATA=GPIO%d", 
+                 pins.bck_io_num, pins.ws_io_num, pins.data_in_num);
   return true;
 }
 
