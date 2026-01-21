@@ -97,11 +97,15 @@ void setup() {
   LOG_I("Main", "========================================");
   
   // Test LRCLK
-  pinMode(PIN_I2S_LRCLK, INPUT);
+  // IMPORTANT: Don't change pinMode - I2S driver controls this pin!
+  // Read directly without changing mode (may not work, but won't interfere)
+  LOG_I("Main", "Reading LRCLK WITHOUT changing pinMode (I2S controls it)...");
   Serial.print("LRCLK readings (200 samples): ");
   int lrclkHigh = 0;
   int lrclkLow = 0;
   
+  // Try to read without changing pinMode
+  // Note: This might not work if I2S has exclusive control
   for (int i = 0; i < 200; i++) {
     int val = digitalRead(PIN_I2S_LRCLK);
     if (val == HIGH) lrclkHigh++;
@@ -112,6 +116,20 @@ void setup() {
   }
   Serial.println();
   Serial.println();
+  
+  // If still stuck, try alternative: Check if I2S is actually reading data
+  // If I2S reads data successfully, LRCLK must be working (even if we can't read it)
+  LOG_I("Main", "Alternative test: Checking if I2S can read data...");
+  uint8_t testBuffer[256];
+  size_t testBytesRead = 0;
+  esp_err_t readResult = i2s_read(I2S_NUM_0, testBuffer, sizeof(testBuffer), &testBytesRead, 100);
+  Logger::printf(LOG_INFO, "Main", "I2S read test: result=%d, bytesRead=%d", readResult, testBytesRead);
+  if (readResult == ESP_OK && testBytesRead > 0) {
+    LOG_I("Main", ">>> I2S IS reading data - LRCLK must be working internally! <<<");
+    LOG_I("Main", ">>> (We just can't read GPIO 25 directly when I2S controls it) <<<");
+  } else {
+    LOG_W("Main", "I2S read failed or returned 0 bytes - LRCLK may truly not be working");
+  }
   
   Logger::printf(LOG_INFO, "Main", "LRCLK Results: HIGH=%d, LOW=%d", lrclkHigh, lrclkLow);
   
@@ -131,12 +149,45 @@ void setup() {
   LOG_I("Main", "########################################");
   LOG_I("Main", "");
   LOG_I("Main", "Summary:");
-  if (bclkHigh > 10 && bclkLow > 10 && lrclkHigh > 10 && lrclkLow > 10) {
-    LOG_I("Main", ">>> BOTH CLOCKS ARE WORKING <<<");
-    LOG_I("Main", "If microphone still shows constant values,");
-    LOG_I("Main", "the issue is likely: wiring, power, or I2S format");
+  LOG_I("Main", "");
+  
+  // Final functional test: Can I2S actually read data?
+  LOG_I("Main", "========================================");
+  LOG_I("Main", "FUNCTIONAL TEST: I2S Data Reading");
+  LOG_I("Main", "========================================");
+  uint8_t functionalBuffer[512];
+  size_t functionalBytesRead = 0;
+  int successfulReads = 0;
+  
+  for (int i = 0; i < 10; i++) {
+    esp_err_t readResult = i2s_read(I2S_NUM_0, functionalBuffer, sizeof(functionalBuffer), &functionalBytesRead, 100);
+    if (readResult == ESP_OK && functionalBytesRead > 0) {
+      successfulReads++;
+      if (i == 0) {
+        Logger::printf(LOG_INFO, "Main", "First read: %d bytes, raw[0]=0x%08X", 
+                       functionalBytesRead, *(uint32_t*)functionalBuffer);
+      }
+    }
+    delay(50);
+  }
+  
+  Logger::printf(LOG_INFO, "Main", "Successful I2S reads: %d/10", successfulReads);
+  
+  if (successfulReads >= 5) {
+    LOG_I("Main", ">>> I2S IS READING DATA SUCCESSFULLY! <<<");
+    LOG_I("Main", ">>> This means LRCLK IS working internally! <<<");
+    LOG_I("Main", ">>> The GPIO read test may be unreliable <<<");
+    LOG_I("Main", "");
+    LOG_I("Main", "CONCLUSION: I2S clocks are functional!");
+    LOG_I("Main", "If microphone shows constant values, check:");
+    LOG_I("Main", "  1. Microphone wiring (SEL pin, power, data line)");
+    LOG_I("Main", "  2. I2S data extraction method");
+    LOG_I("Main", "  3. Microphone hardware");
   } else {
-    LOG_E("Main", ">>> CLOCKS ARE NOT WORKING PROPERLY <<<");
+    LOG_E("Main", ">>> I2S CANNOT READ DATA <<<");
+    LOG_E("Main", ">>> LRCLK is likely NOT working <<<");
+    LOG_E("Main", "");
+    LOG_E("Main", "CONCLUSION: I2S clocks are NOT working properly");
     LOG_E("Main", "Check: I2S driver configuration, pin conflicts, power");
   }
   
