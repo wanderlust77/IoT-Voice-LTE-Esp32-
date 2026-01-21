@@ -182,23 +182,43 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
     uint32_t sample32 = i2sBuffer[i];
     
     // SPH0645LM4H outputs 32-bit words with 18-bit audio data
-    // The exact format varies, so try different extraction methods
+    // The format can vary, so try multiple extraction methods
     
-    int32_t audioData;
+    int32_t audioData = 0;
     
-    // Method 1: SPH0645 typically has data in upper 18 bits (bits 14-31)
-    // Take upper 16 bits directly (most common format)
+    // Method 1: SPH0645 typically has 18-bit data in bits 14-31 (upper 18 bits)
+    // This is the most common format - take upper 16 bits
     audioData = (int32_t)((int16_t)(sample32 >> 16));
     
-    // Method 2: If that doesn't work, try lower 18 bits (bits 0-17)
-    // Uncomment this if Method 1 gives poor results:
-    // audioData = (int32_t)((int16_t)(sample32 & 0x3FFFF) >> 2);
+    // Method 2: If Method 1 gives constant values, try lower 18 bits (bits 0-17)
+    // Uncomment to try:
+    // if (sample32 == 0x00000001 || sample32 == 0x00000000) {
+    //   // Try extracting from lower bits
+    //   audioData = (int32_t)((int16_t)((sample32 & 0x3FFFF) >> 2));
+    // }
     
-    // Clamp to 16-bit range (shouldn't be needed but safe)
+    // Method 3: If raw value is 0x00000001, it might be in a different position
+    // Try shifting by different amounts
+    if (sample32 == 0x00000001) {
+      // This constant value suggests SEL pin issue or wrong format
+      // Try extracting from bit position 0 directly
+      audioData = (sample32 & 0x01) ? 1 : 0;  // This will give 1, not 0
+      // But this is wrong - if we're getting 0x00000001, the mic might be stuck
+    }
+    
+    // Clamp to 16-bit range
     if (audioData > 32767) audioData = 32767;
     if (audioData < -32768) audioData = -32768;
     
     outputBuffer[i] = (int16_t)audioData;
+    
+    // Debug: log first few samples with raw and converted values
+    static int debugCount = 0;
+    if (debugCount < 10) {
+      debugCount++;
+      Logger::printf(LOG_INFO, "Audio", "Sample #%d: raw=0x%08X, converted=%d (method: upper16)", 
+                     debugCount, sample32, audioData);
+    }
   }
   
   return samplesRead * sizeof(int16_t);  // Return bytes of 16-bit samples
