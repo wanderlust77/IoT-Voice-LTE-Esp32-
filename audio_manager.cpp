@@ -8,23 +8,31 @@
 #include "logger.h"
 #include "config.h"
 
-// I2S port number (ESP32 has 2 I2S ports: 0 and 1)
-#define I2S_PORT I2S_NUM_0
+// I2S port numbers - use separate ports for mic and amp
+#define I2S_PORT_RECORDING I2S_NUM_0  // Microphone (RX)
+#define I2S_PORT_PLAYBACK  I2S_NUM_1  // Amplifier (TX)
 
 // ============================================
 // INITIALIZE AUDIO MANAGER
 // ============================================
-bool AudioManager::init(uint8_t bclkPin, uint8_t lrclkPin, uint8_t micDataPin, uint8_t ampDataPin) {
-  pinBclk = bclkPin;
-  pinLrclk = lrclkPin;
+bool AudioManager::init(uint8_t micBclkPin, uint8_t micLrclkPin, uint8_t micDataPin, 
+                        uint8_t ampBclkPin, uint8_t ampLrclkPin, uint8_t ampDataPin) {
+  pinMicBclk = micBclkPin;
+  pinMicLrclk = micLrclkPin;
   pinMicData = micDataPin;
+  pinAmpBclk = ampBclkPin;
+  pinAmpLrclk = ampLrclkPin;
   pinAmpData = ampDataPin;
   
   currentMode = AUDIO_MODE_NONE;
   initialized = true;
   currentSampleRate = SAMPLE_RATE;
   
-  LOG_I("Audio", "Audio manager initialized");
+  Logger::printf(LOG_INFO, "Audio", "Audio manager initialized");
+  Logger::printf(LOG_INFO, "Audio", "Mic pins: BCLK=GPIO%d, LRCLK=GPIO%d, DATA=GPIO%d", 
+                 pinMicBclk, pinMicLrclk, pinMicData);
+  Logger::printf(LOG_INFO, "Audio", "Amp pins: BCLK=GPIO%d, LRCLK=GPIO%d, DATA=GPIO%d", 
+                 pinAmpBclk, pinAmpLrclk, pinAmpData);
   return true;
 }
 
@@ -58,7 +66,7 @@ size_t AudioManager::writePlaybackData(const uint8_t* data, size_t length) {
   }
   
   size_t bytesWritten = 0;
-  esp_err_t result = i2s_write(I2S_PORT, data, length, &bytesWritten, portMAX_DELAY);
+  esp_err_t result = i2s_write(I2S_PORT_PLAYBACK, data, length, &bytesWritten, portMAX_DELAY);
   
   if (result != ESP_OK) {
     Logger::printf(LOG_ERROR, "Audio", "I2S write failed: %d", result);
@@ -76,7 +84,7 @@ void AudioManager::stopPlayback() {
     LOG_I("Audio", "Stopping playback");
     
     // Drain any remaining data
-    i2s_zero_dma_buffer(I2S_PORT);
+    i2s_zero_dma_buffer(I2S_PORT_PLAYBACK);
     
     shutdownI2S();
   }
@@ -99,21 +107,21 @@ bool AudioManager::startRecording(uint32_t sampleRate) {
   }
   
   // Clear DMA buffer to avoid reading stale data
-  i2s_zero_dma_buffer(I2S_PORT);
+  i2s_zero_dma_buffer(I2S_PORT_RECORDING);
   
   // ESP32 I2S RX mode: Sometimes LRCLK doesn't start until we start reading
   // Trigger a dummy read to start the clocks properly
   uint8_t dummyBuffer[64];
   size_t bytesRead = 0;
-  i2s_read(I2S_PORT, dummyBuffer, sizeof(dummyBuffer), &bytesRead, 0);  // Non-blocking
+  i2s_read(I2S_PORT_RECORDING, dummyBuffer, sizeof(dummyBuffer), &bytesRead, 0);  // Non-blocking
   
   // Wait for microphone to stabilize and clocks to start
   delay(500);
   
   LOG_I("Audio", "Recording mode ready");
-  Logger::printf(LOG_INFO, "Audio", "I2S configured: %lu Hz, 32-bit, RX mode", sampleRate);
+  Logger::printf(LOG_INFO, "Audio", "I2S configured: %lu Hz, 32-bit, RX mode (I2S_NUM_0)", sampleRate);
   Logger::printf(LOG_INFO, "Audio", "Pins: BCLK=GPIO%d, LRCLK=GPIO%d, DATA=GPIO%d", 
-                 pinBclk, pinLrclk, pinMicData);
+                 pinMicBclk, pinMicLrclk, pinMicData);
   Logger::printf(LOG_INFO, "Audio", "Format: STAND_I2S, Channel: LEFT only");
   LOG_I("Audio", "NOTE: Triggered dummy read to start LRCLK");
   return true;
@@ -137,7 +145,7 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
   size_t bytesToRead = samplesToRead * sizeof(uint32_t);  // 32-bit samples from I2S
   
   size_t bytesRead = 0;
-  esp_err_t result = i2s_read(I2S_PORT, i2sBuffer, bytesToRead, &bytesRead, 0);  // Non-blocking
+  esp_err_t result = i2s_read(I2S_PORT_RECORDING, i2sBuffer, bytesToRead, &bytesRead, 0);  // Non-blocking
   
   static int readCallCount = 0;
   readCallCount++;
@@ -401,8 +409,8 @@ i2s_config_t AudioManager::getPlaybackConfig(uint32_t sampleRate) {
 // ============================================
 i2s_pin_config_t AudioManager::getPlaybackPins() {
   i2s_pin_config_t pins = {
-    .bck_io_num = pinBclk,
-    .ws_io_num = pinLrclk,
+    .bck_io_num = pinAmpBclk,
+    .ws_io_num = pinAmpLrclk,
     .data_out_num = pinAmpData,
     .data_in_num = I2S_PIN_NO_CHANGE
   };
@@ -435,8 +443,8 @@ i2s_config_t AudioManager::getRecordingConfig(uint32_t sampleRate) {
 // ============================================
 i2s_pin_config_t AudioManager::getRecordingPins() {
   i2s_pin_config_t pins = {
-    .bck_io_num = pinBclk,
-    .ws_io_num = pinLrclk,
+    .bck_io_num = pinMicBclk,
+    .ws_io_num = pinMicLrclk,
     .data_out_num = I2S_PIN_NO_CHANGE,
     .data_in_num = pinMicData
   };
@@ -469,46 +477,56 @@ bool AudioManager::reconfigureI2S(AudioMode newMode, uint32_t sampleRate) {
     return false;
   }
   
+  // Select correct I2S port based on mode
+  i2s_port_t i2sPort = (newMode == AUDIO_MODE_RECORDING) ? I2S_PORT_RECORDING : I2S_PORT_PLAYBACK;
+  
   // Install I2S driver
-  esp_err_t result = i2s_driver_install(I2S_PORT, &config, 0, NULL);
+  esp_err_t result = i2s_driver_install(i2sPort, &config, 0, NULL);
   if (result != ESP_OK) {
     Logger::printf(LOG_ERROR, "Audio", "i2s_driver_install failed: %d", result);
     return false;
   }
   
   // Set pin configuration
-  result = i2s_set_pin(I2S_PORT, &pins);
+  result = i2s_set_pin(i2sPort, &pins);
   if (result != ESP_OK) {
     Logger::printf(LOG_ERROR, "Audio", "i2s_set_pin failed: %d", result);
-    i2s_driver_uninstall(I2S_PORT);
+    i2s_driver_uninstall(i2sPort);
     return false;
   }
   
   // For RX mode, ESP32 I2S needs explicit start AND may need data flow to generate LRCLK
   // i2s_driver_install() doesn't always start clocks in RX mode
   if (newMode == AUDIO_MODE_RECORDING) {
-    result = i2s_start(I2S_PORT);
+    result = i2s_start(i2sPort);
     if (result != ESP_OK) {
       Logger::printf(LOG_ERROR, "Audio", "i2s_start failed: %d", result);
-      i2s_driver_uninstall(I2S_PORT);
+      i2s_driver_uninstall(i2sPort);
       return false;
     }
-    Logger::printf(LOG_INFO, "Audio", "I2S RX mode started explicitly");
+    Logger::printf(LOG_INFO, "Audio", "I2S RX mode started explicitly (I2S_NUM_0)");
     
     // ESP32 I2S RX mode: LRCLK may not toggle until DMA is actively reading
     // Trigger a read to start the DMA and generate LRCLK
     uint8_t dummyBuffer[128];
     size_t bytesRead = 0;
-    i2s_read(I2S_PORT, dummyBuffer, sizeof(dummyBuffer), &bytesRead, 100);  // 100ms timeout
+    i2s_read(i2sPort, dummyBuffer, sizeof(dummyBuffer), &bytesRead, 100);  // 100ms timeout
     Logger::printf(LOG_INFO, "Audio", "Triggered initial read (%d bytes) to start LRCLK", bytesRead);
+  } else {
+    Logger::printf(LOG_INFO, "Audio", "I2S TX mode ready (I2S_NUM_1)");
   }
   
   currentMode = newMode;
   currentSampleRate = sampleRate;
   
   Logger::printf(LOG_INFO, "Audio", "I2S configured: %lu Hz, mode=%d", sampleRate, newMode);
-  Logger::printf(LOG_INFO, "Audio", "I2S pins: BCLK=GPIO%d, LRCLK=GPIO%d, DATA=GPIO%d", 
-                 pins.bck_io_num, pins.ws_io_num, pins.data_in_num);
+  if (newMode == AUDIO_MODE_RECORDING) {
+    Logger::printf(LOG_INFO, "Audio", "I2S pins: BCLK=GPIO%d, LRCLK=GPIO%d, DATA=GPIO%d", 
+                   pins.bck_io_num, pins.ws_io_num, pins.data_in_num);
+  } else {
+    Logger::printf(LOG_INFO, "Audio", "I2S pins: BCLK=GPIO%d, LRCLK=GPIO%d, DATA=GPIO%d", 
+                   pins.bck_io_num, pins.ws_io_num, pins.data_out_num);
+  }
   
   // Wait for clocks to stabilize
   delay(200);
@@ -523,7 +541,12 @@ bool AudioManager::reconfigureI2S(AudioMode newMode, uint32_t sampleRate) {
 void AudioManager::shutdownI2S() {
   if (currentMode != AUDIO_MODE_NONE) {
     LOG_D("Audio", "Shutting down I2S");
-    i2s_driver_uninstall(I2S_PORT);
+    // Shutdown the appropriate I2S port
+    if (currentMode == AUDIO_MODE_RECORDING) {
+      i2s_driver_uninstall(I2S_PORT_RECORDING);
+    } else if (currentMode == AUDIO_MODE_PLAYBACK) {
+      i2s_driver_uninstall(I2S_PORT_PLAYBACK);
+    }
     currentMode = AUDIO_MODE_NONE;
   }
 }

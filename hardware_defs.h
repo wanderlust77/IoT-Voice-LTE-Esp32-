@@ -11,10 +11,21 @@
 // ============================================
 // I2S AUDIO PINS
 // ============================================
-#define PIN_I2S_BCLK      26  // Bit clock (shared by mic and amp)
-#define PIN_I2S_LRCLK     25  // Left/Right clock (shared by mic and amp)
-#define PIN_I2S_MIC_DATA  33  // SPH0645LM4H microphone data input
-#define PIN_I2S_AMP_DATA  22  // MAX98357A amplifier data output
+// Microphone (I2S_NUM_0) - Recording
+#define PIN_I2S_MIC_BCLK      26  // Bit clock for microphone
+#define PIN_I2S_MIC_LRCLK     25  // Left/Right clock for microphone
+#define PIN_I2S_MIC_DATA      33  // SPH0645LM4H microphone data input
+
+// Amplifier (I2S_NUM_1) - Playback
+// NOTE: GPIO 12 and 13 are strapping pins but can be used after boot
+// If you prefer different pins, change these values (must be output-capable GPIOs)
+#define PIN_I2S_AMP_BCLK      12  // Bit clock for amplifier (separate from mic)
+#define PIN_I2S_AMP_LRCLK     13  // Left/Right clock for amplifier (separate from mic)
+#define PIN_I2S_AMP_DATA      22  // MAX98357A amplifier data output
+
+// Legacy aliases for backward compatibility (use mic pins)
+#define PIN_I2S_BCLK      PIN_I2S_MIC_BCLK
+#define PIN_I2S_LRCLK     PIN_I2S_MIC_LRCLK
 
 // ============================================
 // NFC PN532 (I2C MODE)

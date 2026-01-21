@@ -146,7 +146,8 @@ void setup() {
   LOG_I("Main", "Initializing audio...");
   Serial.flush();
   unsigned long audioStartTime = millis();
-  bool audioSuccess = audio.init(PIN_I2S_BCLK, PIN_I2S_LRCLK, PIN_I2S_MIC_DATA, PIN_I2S_AMP_DATA);
+  bool audioSuccess = audio.init(PIN_I2S_MIC_BCLK, PIN_I2S_MIC_LRCLK, PIN_I2S_MIC_DATA, 
+                                 PIN_I2S_AMP_BCLK, PIN_I2S_AMP_LRCLK, PIN_I2S_AMP_DATA);
   unsigned long audioDuration = millis() - audioStartTime;
   Logger::printf(LOG_INFO, "Main", "Audio init took %lu ms", audioDuration);
   
@@ -290,17 +291,45 @@ void loop() {
       if (bytesRead > 0) {
         size_t samplesRead = bytesRead / sizeof(int16_t);
         
+        // Log raw I2S data for first few reads to diagnose
+        static int readCount = 0;
+        readCount++;
+        if (readCount <= 5) {
+          // Get raw 32-bit I2S data (before extraction)
+          // Note: This requires accessing internal I2S buffer, so we'll log what we can
+          Logger::printf(LOG_INFO, "Main", "I2S Read #%d: %d samples captured", readCount, samplesRead);
+        }
+        
         // Log all audio data
         Serial.print("[DATA] Samples [");
         Serial.print(recordedSamples);
         Serial.print("..");
         Serial.print(recordedSamples + samplesRead - 1);
         Serial.print("]: ");
+        
+        // Check for constant values
+        bool allOnes = true;
+        bool allZeros = true;
         for (size_t i = 0; i < samplesRead; i++) {
+          if (readBuffer[i] != 1) allOnes = false;
+          if (readBuffer[i] != 0) allZeros = false;
           Serial.print(readBuffer[i]);
           if (i < samplesRead - 1) Serial.print(", ");
         }
         Serial.println();
+        
+        // Warn if constant values detected
+        if (readCount <= 5) {
+          if (allOnes) {
+            LOG_W("Main", "⚠️  WARNING: All samples are 1 - microphone stuck!");
+            LOG_W("Main", "Check: 1) Microphone power (3.3V), 2) SEL pin (GND), 3) DOUT wiring");
+          } else if (allZeros) {
+            LOG_W("Main", "⚠️  WARNING: All samples are 0 - microphone not sending data!");
+            LOG_W("Main", "Check: 1) Microphone power (3.3V), 2) DOUT wiring (GPIO 33)");
+          } else {
+            Logger::printf(LOG_INFO, "Main", "✅ Good: Samples are varying (not constant)");
+          }
+        }
         
         // Copy samples to main buffer
         if (recordedSamples + samplesRead <= audioBufferSize) {

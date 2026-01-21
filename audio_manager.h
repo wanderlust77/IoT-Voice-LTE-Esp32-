@@ -26,7 +26,9 @@ enum AudioMode {
 class AudioManager {
 public:
   // Initialize audio manager (doesn't configure I2S yet)
-  bool init(uint8_t bclkPin, uint8_t lrclkPin, uint8_t micDataPin, uint8_t ampDataPin);
+  // Separate pins for microphone and amplifier
+  bool init(uint8_t micBclkPin, uint8_t micLrclkPin, uint8_t micDataPin, 
+            uint8_t ampBclkPin, uint8_t ampLrclkPin, uint8_t ampDataPin);
   
   // ========================================
   // PLAYBACK FUNCTIONS
@@ -67,10 +69,12 @@ public:
   bool isActive();
 
 private:
-  // Pin assignments
-  uint8_t pinBclk;
-  uint8_t pinLrclk;
+  // Pin assignments - separate for mic and amp
+  uint8_t pinMicBclk;
+  uint8_t pinMicLrclk;
   uint8_t pinMicData;
+  uint8_t pinAmpBclk;
+  uint8_t pinAmpLrclk;
   uint8_t pinAmpData;
   
   // Current state
