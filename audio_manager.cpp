@@ -314,7 +314,7 @@ i2s_config_t AudioManager::getRecordingConfig(uint32_t sampleRate) {
     .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
     .dma_buf_count = DMA_BUFFER_COUNT,
     .dma_buf_len = DMA_BUFFER_SIZE,
-    .use_apll = false,  // Set to true for better clock accuracy
+    .use_apll = true,  // Enable APLL for better clock generation (may help LRCLK)
     .tx_desc_auto_clear = false,
     .fixed_mclk = 0
   };
@@ -375,7 +375,7 @@ bool AudioManager::reconfigureI2S(AudioMode newMode, uint32_t sampleRate) {
     return false;
   }
   
-  // For RX mode, ESP32 I2S may need explicit start to generate clocks
+  // For RX mode, ESP32 I2S needs explicit start AND may need data flow to generate LRCLK
   // i2s_driver_install() doesn't always start clocks in RX mode
   if (newMode == AUDIO_MODE_RECORDING) {
     result = i2s_start(I2S_PORT);
@@ -385,6 +385,13 @@ bool AudioManager::reconfigureI2S(AudioMode newMode, uint32_t sampleRate) {
       return false;
     }
     Logger::printf(LOG_INFO, "Audio", "I2S RX mode started explicitly");
+    
+    // ESP32 I2S RX mode: LRCLK may not toggle until DMA is actively reading
+    // Trigger a read to start the DMA and generate LRCLK
+    uint8_t dummyBuffer[128];
+    size_t bytesRead = 0;
+    i2s_read(I2S_PORT, dummyBuffer, sizeof(dummyBuffer), &bytesRead, 100);  // 100ms timeout
+    Logger::printf(LOG_INFO, "Audio", "Triggered initial read (%d bytes) to start LRCLK", bytesRead);
   }
   
   currentMode = newMode;
