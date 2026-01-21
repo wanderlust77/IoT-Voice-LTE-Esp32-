@@ -72,6 +72,10 @@ void loop() {
     static int readCount = 0;
     readCount++;
     
+    // IMPORTANT: Log raw 32-bit I2S data first to see what we're actually getting
+    // Get the raw 32-bit buffer from audio_manager (we need to modify audio_manager to expose this)
+    // For now, let's add detailed logging to audio_manager and check what raw values we get
+    
     // Log all audio data in real-time
     Serial.print("[DATA] Read #");
     Serial.print(readCount);

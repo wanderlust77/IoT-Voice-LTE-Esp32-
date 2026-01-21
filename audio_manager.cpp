@@ -187,12 +187,16 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
   size_t samplesRead = bytesRead / sizeof(uint32_t);
   int16_t* outputBuffer = (int16_t*)buffer;
   
-  // Log raw values periodically (every 50 reads with data)
+  // Log raw 32-bit I2S values - ALWAYS log first 10 reads, then periodically
   static int dataReadCount = 0;
   dataReadCount++;
-  if (dataReadCount <= 3 || dataReadCount % 50 == 0) {
-    Logger::printf(LOG_INFO, "Audio", "Data read #%d: samples=%d, raw[0]=%08X, raw[1]=%08X", 
-                   dataReadCount, samplesRead, i2sBuffer[0], i2sBuffer[1]);
+  if (dataReadCount <= 10 || dataReadCount % 50 == 0) {
+    Logger::printf(LOG_INFO, "Audio", "Raw I2S #%d: samples=%d, raw[0]=0x%08X, raw[1]=0x%08X, raw[2]=0x%08X, raw[3]=0x%08X", 
+                   dataReadCount, samplesRead, 
+                   samplesRead > 0 ? i2sBuffer[0] : 0,
+                   samplesRead > 1 ? i2sBuffer[1] : 0,
+                   samplesRead > 2 ? i2sBuffer[2] : 0,
+                   samplesRead > 3 ? i2sBuffer[3] : 0);
   }
   
   for (size_t i = 0; i < samplesRead; i++) {
@@ -214,47 +218,65 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
     //   audioData = (int32_t)((int16_t)((sample32 & 0x3FFFF) >> 2));
     // }
     
-    // Handle special cases
+    // SPH0645LM4H data extraction
+    // The microphone outputs 18-bit audio data in 32-bit words
+    // Format varies: could be in upper bits (14-31) or lower bits (0-17)
+    // Try multiple extraction methods
+    
     if (sample32 == 0x00000000) {
-      // All zeros - microphone not sending data
+      // All zeros
       audioData = 0;
     } else if (sample32 == 0x00000001) {
-      // Constant 0x00000001 - microphone stuck/invalid state
-      static bool loggedStuckState = false;
-      if (!loggedStuckState) {
-        loggedStuckState = true;
-        LOG_W("Audio", "WARNING: Constant 0x00000001 detected!");
-        LOG_W("Audio", "I2S clocks are working, but microphone is stuck.");
-        LOG_W("Audio", "Check: Microphone power (3.3V), SEL pin (must be GND), hardware fault");
-      }
-      audioData = (sample32 & 0x01) ? 1 : 0;  // Extract bit 0
-    } else {
-      // Normal data - SPH0645LM4H format can vary
-      // Try multiple extraction methods to find the correct one
+      // This is likely a stuck state OR we're reading the wrong bit position
+      // Let's try to extract actual audio data - don't just return 1
+      // The value 0x00000001 might mean audio is in the lower bits
       
-      // Method 1: Upper 16 bits (most common: bits 16-31)
+      // Try extracting from lower 18 bits first
+      int32_t lower18 = (sample32 & 0x3FFFF);
+      if (lower18 & 0x20000) {
+        lower18 |= 0xFFFC0000;  // Sign extend
+      }
+      audioData = lower18 >> 2;
+      
+      // If that gives 0, log it for debugging
+      static bool loggedExtraction = false;
+      if (!loggedExtraction && audioData == 0) {
+        loggedExtraction = true;
+        LOG_W("Audio", "Raw value 0x00000001 detected - trying alternative extraction");
+        Logger::printf(LOG_INFO, "Audio", "Sample32=0x%08X, trying lower18 extraction", sample32);
+      }
+      
+      // If still getting 1, it's truly stuck
+      if (audioData == 0 && (sample32 & 0x01)) {
+        audioData = 1;  // Last resort
+      }
+    } else {
+      // Normal data - try all extraction methods
+      
+      // Method 1: Upper 16 bits (bits 16-31) - most common
       audioData = (int32_t)((int16_t)(sample32 >> 16));
       
-      // Method 2: If Method 1 gives 0 but sample32 is non-zero, try bits 14-31
-      // SPH0645 sometimes puts 18-bit data starting at bit 14
+      // Method 2: Bits 14-31 (18-bit left-aligned) - common SPH0645 format
       if (audioData == 0 && sample32 != 0) {
-        // Extract from bits 14-31 (18-bit left-aligned)
         int32_t upper18 = (sample32 >> 14);
-        // Sign extend if bit 17 is set (18-bit sign bit)
         if (upper18 & 0x20000) {
-          upper18 |= 0xFFFC0000;  // Sign extend to 32-bit
+          upper18 |= 0xFFFC0000;  // Sign extend
         }
-        // Convert 18-bit to 16-bit (shift right by 2)
         audioData = (int32_t)((int16_t)(upper18 >> 2));
       }
       
-      // Method 3: If still 0, try lower 18 bits (bits 0-17)
+      // Method 3: Lower 18 bits (bits 0-17)
       if (audioData == 0 && sample32 != 0) {
         int32_t lower18 = (sample32 & 0x3FFFF);
         if (lower18 & 0x20000) {
           lower18 |= 0xFFFC0000;  // Sign extend
         }
-        audioData = lower18 >> 2;  // Convert 18-bit to 16-bit
+        audioData = lower18 >> 2;
+      }
+      
+      // Method 4: Try bits 15-30 (alternative alignment)
+      if (audioData == 0 && sample32 != 0) {
+        audioData = (int32_t)((int16_t)(sample32 >> 15));
       }
     }
     
