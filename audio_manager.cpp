@@ -206,23 +206,34 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
     //   audioData = (int32_t)((int16_t)((sample32 & 0x3FFFF) >> 2));
     // }
     
-    // If raw value is constant 0x00000001, the microphone is likely:
-    // 1. Not receiving I2S clocks (BCLK/LRCLK) - MOST LIKELY
-    // 2. In wrong I2S format
-    // 3. Not powered correctly
-    // The value 0x00000001 when shifted >> 16 gives 0, but we're seeing 1,
-    // which means we might be reading the wrong bit or the mic is stuck
-    if (sample32 == 0x00000001) {
-      // This is a stuck/invalid state - log it once
+    // Handle special cases
+    if (sample32 == 0x00000000) {
+      // All zeros - microphone not sending data
+      audioData = 0;
+    } else if (sample32 == 0x00000001) {
+      // Constant 0x00000001 - microphone stuck/invalid state
       static bool loggedStuckState = false;
       if (!loggedStuckState) {
         loggedStuckState = true;
         LOG_W("Audio", "WARNING: Constant 0x00000001 detected!");
-        LOG_W("Audio", "Possible causes: 1) I2S clocks not working, 2) Wrong I2S format, 3) Mic not powered");
-        LOG_W("Audio", "Check: BCLK/LRCLK signals, I2S format, microphone power");
+        LOG_W("Audio", "I2S clocks are working, but microphone is stuck.");
+        LOG_W("Audio", "Check: Microphone power (3.3V), SEL pin (must be GND), hardware fault");
       }
-      // Extract bit 0 (gives 1) - this is wrong but shows we're reading something
-      audioData = (sample32 & 0x01) ? 1 : 0;
+      audioData = (sample32 & 0x01) ? 1 : 0;  // Extract bit 0
+    } else {
+      // Normal data - extract using standard method
+      // SPH0645: 18-bit data in upper bits, take upper 16 bits
+      audioData = (int32_t)((int16_t)(sample32 >> 16));
+      
+      // If that gives 0 but sample32 is non-zero, try alternative extraction
+      if (audioData == 0 && sample32 != 0) {
+        // Try lower 18 bits
+        int32_t lower18 = (sample32 & 0x3FFFF);
+        if (lower18 & 0x20000) {
+          lower18 |= 0xFFFC0000;  // Sign extend
+        }
+        audioData = lower18 >> 2;
+      }
     }
     
     // Clamp to 16-bit range
@@ -230,13 +241,45 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
     if (audioData < -32768) audioData = -32768;
     
     outputBuffer[i] = (int16_t)audioData;
-    
-    // Debug: log first few samples with raw and converted values
-    static int debugCount = 0;
-    if (debugCount < 10) {
-      debugCount++;
-      Logger::printf(LOG_INFO, "Audio", "Sample #%d: raw=0x%08X, converted=%d (method: upper16)", 
-                     debugCount, sample32, audioData);
+  }
+  
+  // Log diagnostics for all-zero case
+  static bool loggedAllZeros = false;
+  if (!loggedAllZeros && samplesRead > 0 && i2sBuffer[0] == 0x00000000) {
+    // Check if ALL samples are zero
+    bool allZeros = true;
+    for (size_t i = 0; i < samplesRead && i < 10; i++) {
+      if (i2sBuffer[i] != 0x00000000) {
+        allZeros = false;
+        break;
+      }
+    }
+    if (allZeros) {
+      loggedAllZeros = true;
+      LOG_W("Audio", "========================================");
+      LOG_W("Audio", "WARNING: All I2S samples are 0x00000000!");
+      LOG_W("Audio", "I2S clocks are working, but microphone sends no data.");
+      LOG_W("Audio", "");
+      LOG_W("Audio", "TROUBLESHOOTING:");
+      LOG_W("Audio", "1. Measure VDD pin on microphone (should be 3.3V)");
+      LOG_W("Audio", "2. Verify SEL pin is connected to GND (confirmed ✅)");
+      LOG_W("Audio", "3. Check DOUT (GPIO 33) wiring - should connect to mic DOUT");
+      LOG_W("Audio", "4. Verify microphone is not damaged");
+      LOG_W("Audio", "5. Try speaking loudly into microphone");
+      LOG_W("Audio", "========================================");
+    }
+  }
+  
+  // Log first non-zero sample when found
+  static bool loggedNonZero = false;
+  if (!loggedNonZero && samplesRead > 0) {
+    for (size_t i = 0; i < samplesRead; i++) {
+      if (i2sBuffer[i] != 0x00000000 && i2sBuffer[i] != 0x00000001) {
+        loggedNonZero = true;
+        Logger::printf(LOG_INFO, "Audio", "✅ First non-zero sample: raw[%d]=0x%08X, converted=%d", 
+                       i, i2sBuffer[i], outputBuffer[i]);
+        break;
+      }
     }
   }
   
