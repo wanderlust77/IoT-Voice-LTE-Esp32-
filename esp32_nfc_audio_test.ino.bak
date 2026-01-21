@@ -168,27 +168,40 @@ void setup() {
   
   logHeapStatus();
   
-  // Automatically start recording
+  // ========================================
+  // I2S CLOCK DIAGNOSTIC TEST
+  // ========================================
+  // Run this BEFORE starting recording to test clocks
+  LOG_I("Main", "");
+  LOG_I("Main", "");
+  LOG_I("Main", "########################################");
+  LOG_I("Main", "##  I2S CLOCK DIAGNOSTIC TEST  ##");
+  LOG_I("Main", "########################################");
+  LOG_I("Main", "");
+  
+  // Start recording first to enable I2S clocks
   if (!audio.startRecording(SAMPLE_RATE)) {
     LOG_E("Main", "Failed to start audio recording");
     currentState = STATE_ERROR;
     return;
   }
   
-  // Wait for I2S to stabilize
+  // Wait for I2S to stabilize and clocks to start
+  LOG_I("Main", "Waiting for I2S clocks to stabilize...");
+  delay(1000);  // Increased delay
+  Serial.flush();
+  
+  LOG_I("Main", "");
+  LOG_I("Main", "Starting clock diagnostic test...");
+  LOG_I("Main", "This will take a few seconds...");
+  Serial.flush();
   delay(500);
   
-  // ========================================
-  // I2S CLOCK DIAGNOSTIC TEST
-  // ========================================
-  LOG_I("Main", "");
-  LOG_I("Main", "========================================");
-  LOG_I("Main", "I2S CLOCK DIAGNOSTIC TEST");
-  LOG_I("Main", "========================================");
-  
   // Test BCLK (GPIO 26)
-  pinMode(PIN_I2S_BCLK, INPUT);
-  LOG_I("Main", "Testing BCLK (GPIO 26)...");
+  // Note: Setting pinMode might interfere with I2S, but we need to read it
+  // I2S should have already configured these pins, so we're just reading them
+  LOG_I("Main", "");
+  LOG_I("Main", ">>> Testing BCLK (GPIO 26) <<<");
   Serial.print("BCLK readings (200 samples): ");
   int bclkHigh = 0;
   int bclkLow = 0;
@@ -240,20 +253,17 @@ void setup() {
     LOG_I("Main", "LRCLK is toggling - word clock appears to be working!");
   }
   
-  LOG_I("Main", "========================================");
   LOG_I("Main", "");
+  LOG_I("Main", "########################################");
+  LOG_I("Main", "##  END OF CLOCK DIAGNOSTIC TEST  ##");
+  LOG_I("Main", "########################################");
+  LOG_I("Main", "");
+  Serial.flush();
+  delay(1000);  // Pause so user can read the results
   
-  // Restore pin modes (I2S will reconfigure them)
-  delay(100);
-  
-  // Restart recording after test
-  audio.stopRecording();
-  delay(100);
-  if (!audio.startRecording(SAMPLE_RATE)) {
-    LOG_E("Main", "Failed to restart recording after clock test");
-    currentState = STATE_ERROR;
-    return;
-  }
+  // Note: We don't need to restart recording - I2S is still running
+  // The pinMode calls above might have interfered, but I2S should recover
+  // If needed, we can restart, but let's see if it works without restart
   
   recordedSamples = 0;
   recordingStartTime = millis();
