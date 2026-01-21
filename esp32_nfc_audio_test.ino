@@ -289,6 +289,62 @@ void loop() {
       if (bytesRead > 0) {
         size_t samplesRead = bytesRead / sizeof(int16_t);
         
+        // Log audio data samples
+        static unsigned long lastDataLog = 0;
+        static int logCount = 0;
+        bool shouldLog = false;
+        
+        // Log first chunk, then periodically (every 500ms)
+        if (logCount == 0 || (millis() - lastDataLog > 500)) {
+          shouldLog = true;
+          lastDataLog = millis();
+          logCount++;
+        }
+        
+        if (shouldLog) {
+          // Calculate statistics
+          int16_t minVal = readBuffer[0];
+          int16_t maxVal = readBuffer[0];
+          int32_t sumAbs = 0;
+          
+          for (size_t i = 0; i < samplesRead; i++) {
+            int16_t val = readBuffer[i];
+            if (val < minVal) minVal = val;
+            if (val > maxVal) maxVal = val;
+            sumAbs += abs((int32_t)val);
+          }
+          
+          int32_t avgAbs = sumAbs / samplesRead;
+          
+          // Log sample range and statistics
+          Logger::printf(LOG_INFO, "Main", "Chunk stats: min=%d, max=%d, avg_abs=%d", 
+                        minVal, maxVal, avgAbs);
+          
+          // Log first 10 and last 10 samples of chunk
+          size_t logSamples = min((size_t)10, samplesRead);
+          Serial.print("[DEBUG] [Main] Samples [0..");
+          Serial.print(logSamples - 1);
+          Serial.print("]: ");
+          for (size_t i = 0; i < logSamples; i++) {
+            Serial.print(readBuffer[i]);
+            if (i < logSamples - 1) Serial.print(", ");
+          }
+          Serial.println();
+          
+          if (samplesRead > 20) {
+            Serial.print("[DEBUG] [Main] Samples [");
+            Serial.print(samplesRead - logSamples);
+            Serial.print("..");
+            Serial.print(samplesRead - 1);
+            Serial.print("]: ");
+            for (size_t i = samplesRead - logSamples; i < samplesRead; i++) {
+              Serial.print(readBuffer[i]);
+              if (i < samplesRead - 1) Serial.print(", ");
+            }
+            Serial.println();
+          }
+        }
+        
         // Copy samples to main buffer
         if (recordedSamples + samplesRead <= audioBufferSize) {
           memcpy(&audioBuffer[recordedSamples], readBuffer, bytesRead);
@@ -318,6 +374,57 @@ void loop() {
         audio.stopRecording();
         LOG_I("Main", "========================================");
         Logger::printf(LOG_INFO, "Main", "Recording complete! Captured %d samples", recordedSamples);
+        
+        // Final statistics on entire recording
+        if (recordedSamples > 0) {
+          int16_t minVal = audioBuffer[0];
+          int16_t maxVal = audioBuffer[0];
+          int32_t sumAbs = 0;
+          int zeroCount = 0;
+          
+          for (size_t i = 0; i < recordedSamples; i++) {
+            int16_t val = audioBuffer[i];
+            if (val < minVal) minVal = val;
+            if (val > maxVal) maxVal = val;
+            sumAbs += abs((int32_t)val);
+            if (val == 0) zeroCount++;
+          }
+          
+          int32_t avgAbs = sumAbs / recordedSamples;
+          
+          Logger::printf(LOG_INFO, "Main", "Audio range: %d to %d (max possible: ±32768)", 
+                        minVal, maxVal);
+          Logger::printf(LOG_INFO, "Main", "Average absolute value: %d", avgAbs);
+          Logger::printf(LOG_INFO, "Main", "Zero samples: %d / %d (%.1f%%)", 
+                        zeroCount, recordedSamples, (float)zeroCount / recordedSamples * 100.0f);
+          
+          // Log first and last 20 samples
+          size_t logCount = min((size_t)20, recordedSamples);
+          Serial.print("[DEBUG] [Main] First ");
+          Serial.print(logCount);
+          Serial.print(" samples: ");
+          for (size_t i = 0; i < logCount; i++) {
+            Serial.print(audioBuffer[i]);
+            if (i < logCount - 1) Serial.print(", ");
+          }
+          Serial.println();
+          
+          if (recordedSamples > logCount) {
+            Serial.print("[DEBUG] [Main] Last ");
+            Serial.print(logCount);
+            Serial.print(" samples: ");
+            for (size_t i = recordedSamples - logCount; i < recordedSamples; i++) {
+              Serial.print(audioBuffer[i]);
+              if (i < recordedSamples - 1) Serial.print(", ");
+            }
+            Serial.println();
+          }
+          
+          if (avgAbs < 100) {
+            Logger::printf(LOG_WARN, "Main", "WARNING: Very low audio levels (avg_abs=%d). Check microphone.", avgAbs);
+          }
+        }
+        
         Logger::printf(LOG_INFO, "Main", "Long-press button to play back (gain: %.1fx)", AUDIO_GAIN_MULTIPLIER);
         LOG_I("Main", "========================================");
         currentState = STATE_READING_NFC;
