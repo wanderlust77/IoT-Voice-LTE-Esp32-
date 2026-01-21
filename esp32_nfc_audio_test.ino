@@ -157,14 +157,24 @@ void setup() {
   LOG_I("Main", "========================================");
   LOG_I("Main", "Initialization complete!");
   LOG_I("Main", "");
-  LOG_I("Main", "Usage:");
-  LOG_I("Main", "1. Present NFC tag to reader");
-  LOG_I("Main", "2. SHORT press button → Record 3 seconds");
-  LOG_I("Main", "3. LONG press button → Playback recording");
+  LOG_I("Main", "AUTO-RECORDING MODE: Starting automatic recording...");
   LOG_I("Main", "========================================");
   
   logHeapStatus();
-  currentState = STATE_IDLE;
+  
+  // Automatically start recording
+  if (!audio.startRecording(SAMPLE_RATE)) {
+    LOG_E("Main", "Failed to start audio recording");
+    currentState = STATE_ERROR;
+    return;
+  }
+  
+  recordedSamples = 0;
+  recordingStartTime = millis();
+  currentState = STATE_RECORDING;
+  
+  LOG_I("Main", "Recording started automatically - speak into microphone!");
+  LOG_I("Main", "Recording for 3 seconds...");
 }
 
 // ============================================
@@ -285,12 +295,49 @@ void loop() {
           recordedSamples += bytesRead / sizeof(int16_t);
         }
         
-        // Progress indicator every 500ms
+        // Progress indicator and sample logging every 500ms
         static unsigned long lastProgress = 0;
+        static unsigned long lastSampleLog = 0;
         if (millis() - lastProgress > 500) {
           lastProgress = millis();
           float elapsed = (float)(millis() - recordingStartTime) / 1000.0f;
-          Logger::printf(LOG_INFO, "Main", "Recording... %.1fs / 3.0s", elapsed);
+          Logger::printf(LOG_INFO, "Main", "Recording... %.1fs / 3.0s (samples: %d)", elapsed, recordedSamples);
+        }
+        
+        // Log sample data every 200ms (show raw values)
+        if (millis() - lastSampleLog > 200 && recordedSamples > 0) {
+          lastSampleLog = millis();
+          
+          // Show last 10 samples
+          int startIdx = (recordedSamples >= 10) ? recordedSamples - 10 : 0;
+          int count = (recordedSamples >= 10) ? 10 : recordedSamples;
+          
+          Serial.print("[DATA] Samples [");
+          Serial.print(startIdx);
+          Serial.print("..");
+          Serial.print(startIdx + count - 1);
+          Serial.print("]: ");
+          
+          for (int i = 0; i < count; i++) {
+            Serial.print(audioBuffer[startIdx + i]);
+            if (i < count - 1) Serial.print(", ");
+          }
+          Serial.println();
+          
+          // Calculate and show statistics for current chunk
+          int32_t chunkMin = 32767;
+          int32_t chunkMax = -32768;
+          int32_t chunkSum = 0;
+          for (int i = startIdx; i < startIdx + count; i++) {
+            int32_t val = audioBuffer[i];
+            if (val < chunkMin) chunkMin = val;
+            if (val > chunkMax) chunkMax = val;
+            chunkSum += (val > 0 ? val : -val);  // Absolute sum
+          }
+          int32_t chunkAvg = chunkSum / count;
+          
+          Logger::printf(LOG_INFO, "Main", "Chunk stats: min=%d, max=%d, avg_abs=%d", 
+                        chunkMin, chunkMax, chunkAvg);
         }
       } else {
         // Recording complete
@@ -298,23 +345,62 @@ void loop() {
         LOG_I("Main", "========================================");
         Logger::printf(LOG_INFO, "Main", "Recording complete! Captured %d samples", recordedSamples);
         
-        // Check if audio was actually captured (not silence)
+        // Detailed analysis of recorded audio
+        LOG_I("Main", "Analyzing recorded audio data...");
+        
         int32_t maxSample = 0;
         int32_t minSample = 0;
+        int64_t sumSamples = 0;
+        int32_t zeroCount = 0;
+        
         for (size_t i = 0; i < recordedSamples; i++) {
-          if (audioBuffer[i] > maxSample) maxSample = audioBuffer[i];
-          if (audioBuffer[i] < minSample) minSample = audioBuffer[i];
+          int32_t val = audioBuffer[i];
+          if (val > maxSample) maxSample = val;
+          if (val < minSample) minSample = val;
+          sumSamples += (val > 0 ? val : -val);  // Absolute value sum
+          if (val == 0) zeroCount++;
         }
+        
+        int32_t avgAbs = (recordedSamples > 0) ? (sumSamples / recordedSamples) : 0;
+        
         Logger::printf(LOG_INFO, "Main", "Audio range: %d to %d (max possible: ±32768)", minSample, maxSample);
+        Logger::printf(LOG_INFO, "Main", "Average absolute value: %d", avgAbs);
+        Logger::printf(LOG_INFO, "Main", "Zero samples: %d / %d (%.1f%%)", 
+                      zeroCount, recordedSamples, (float)zeroCount / recordedSamples * 100.0f);
+        
+        // Show first 20 samples
+        Serial.print("[DATA] First 20 samples: ");
+        int showCount = (recordedSamples < 20) ? recordedSamples : 20;
+        for (int i = 0; i < showCount; i++) {
+          Serial.print(audioBuffer[i]);
+          if (i < showCount - 1) Serial.print(", ");
+        }
+        Serial.println();
+        
+        // Show last 20 samples
+        if (recordedSamples > 20) {
+          Serial.print("[DATA] Last 20 samples: ");
+          int startIdx = recordedSamples - 20;
+          for (int i = 0; i < 20; i++) {
+            Serial.print(audioBuffer[startIdx + i]);
+            if (i < 19) Serial.print(", ");
+          }
+          Serial.println();
+        }
         
         if (maxSample == 0 && minSample == 0) {
           LOG_W("Main", "WARNING: All samples are zero! Microphone may not be working.");
+        } else if (zeroCount > recordedSamples * 0.95f) {
+          LOG_W("Main", "WARNING: >95%% samples are zero! Microphone may not be working.");
+        } else if (avgAbs < 100) {
+          LOG_W("Main", "WARNING: Very low audio levels (avg_abs=%d). Check microphone.");
         } else {
           int32_t absMax = (maxSample > 0) ? maxSample : -maxSample;
           int32_t absMin = (minSample > 0) ? minSample : -minSample;
           int32_t peak = (absMax > absMin) ? absMax : absMin;
           float peakLevel = (float)peak / 32768.0f * 100.0f;
           Logger::printf(LOG_INFO, "Main", "Peak level: %.1f%% of maximum", peakLevel);
+          LOG_I("Main", "Audio capture looks good!");
         }
         
         logHeapStatus();
