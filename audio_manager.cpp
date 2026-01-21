@@ -101,7 +101,12 @@ bool AudioManager::startRecording(uint32_t sampleRate) {
   // Clear DMA buffer to avoid reading stale data
   i2s_zero_dma_buffer(I2S_PORT);
   
+  // Wait a bit for microphone to stabilize and start outputting data
+  delay(100);
+  
   LOG_I("Audio", "Recording mode ready");
+  Logger::printf(LOG_INFO, "Audio", "I2S configured: %lu Hz, 32-bit, RX mode, pins: BCLK=%d, LRCLK=%d, DATA=%d", 
+                 sampleRate, pinBclk, pinLrclk, pinMicData);
   return true;
 }
 
@@ -125,13 +130,25 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
   size_t bytesRead = 0;
   esp_err_t result = i2s_read(I2S_PORT, i2sBuffer, bytesToRead, &bytesRead, 0);  // Non-blocking
   
+  static bool firstCall = true;
+  if (firstCall) {
+    firstCall = false;
+    Logger::printf(LOG_INFO, "Audio", "First I2S read: result=%d, bytesRead=%d, bytesToRead=%d", 
+                   result, bytesRead, bytesToRead);
+  }
+  
   if (result != ESP_OK) {
-    Logger::printf(LOG_ERROR, "Audio", "I2S read failed: %d", result);
+    static unsigned long lastError = 0;
+    if (millis() - lastError > 2000) {  // Log errors every 2 seconds
+      lastError = millis();
+      Logger::printf(LOG_ERROR, "Audio", "I2S read failed: %d", result);
+    }
     return 0;
   }
   
   if (bytesRead == 0) {
-    return 0;  // No data available
+    // This is normal if no data is available yet (non-blocking mode)
+    return 0;
   }
   
   // Convert 32-bit samples to 16-bit
@@ -144,8 +161,9 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
   static bool firstRead = true;
   if (firstRead && samplesRead > 0) {
     firstRead = false;
-    Logger::printf(LOG_INFO, "Audio", "First raw 32-bit samples (hex): %08X, %08X, %08X", 
-                   i2sBuffer[0], i2sBuffer[1], i2sBuffer[2]);
+    Logger::printf(LOG_INFO, "Audio", "First raw 32-bit samples (hex): %08X, %08X, %08X, %08X", 
+                   i2sBuffer[0], i2sBuffer[1], i2sBuffer[2], i2sBuffer[3]);
+    Logger::printf(LOG_INFO, "Audio", "Samples read: %d, Bytes read: %d", samplesRead, bytesRead);
   }
   
   for (size_t i = 0; i < samplesRead; i++) {
