@@ -188,8 +188,29 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
   int16_t* outputBuffer = (int16_t*)buffer;
   
   // Log raw 32-bit I2S values - ALWAYS log first 10 reads, then periodically
+  // Also check if raw values are actually varying (even slightly)
   static int dataReadCount = 0;
+  static uint32_t lastRawValues[4] = {0, 0, 0, 0};
+  static bool rawValuesVarying = false;
   dataReadCount++;
+  
+  // Check if raw values are varying
+  if (dataReadCount <= 2 && samplesRead >= 4) {
+    // Compare with previous values
+    bool varying = false;
+    for (int i = 0; i < 4 && i < (int)samplesRead; i++) {
+      if (i2sBuffer[i] != lastRawValues[i]) {
+        varying = true;
+        rawValuesVarying = true;
+        break;
+      }
+      lastRawValues[i] = i2sBuffer[i];
+    }
+    if (varying && dataReadCount == 2) {
+      LOG_I("Audio", "✅ Raw I2S values ARE varying - microphone is sending data!");
+    }
+  }
+  
   if (dataReadCount <= 10 || dataReadCount % 50 == 0) {
     Logger::printf(LOG_INFO, "Audio", "Raw I2S #%d: samples=%d, raw[0]=0x%08X, raw[1]=0x%08X, raw[2]=0x%08X, raw[3]=0x%08X", 
                    dataReadCount, samplesRead, 
@@ -197,6 +218,18 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
                    samplesRead > 1 ? i2sBuffer[1] : 0,
                    samplesRead > 2 ? i2sBuffer[2] : 0,
                    samplesRead > 3 ? i2sBuffer[3] : 0);
+    
+    // If raw values are constant 0x00000001, suggest checking I2S format
+    if (dataReadCount <= 3 && samplesRead >= 1) {
+      if (i2sBuffer[0] == 0x00000001 && i2sBuffer[1] == 0x00000001) {
+        LOG_W("Audio", "⚠️  Raw values are constant 0x00000001");
+        LOG_W("Audio", "If hardware is OK, possible causes:");
+        LOG_W("Audio", "1. I2S format/alignment wrong (try STAND_MSB or I2S_MSB)");
+        LOG_W("Audio", "2. Clock timing issue (BCLK/LRCLK alignment)");
+        LOG_W("Audio", "3. Microphone very quiet (try speaking loudly)");
+        LOG_W("Audio", "4. I2S data line not connected correctly");
+      }
+    }
   }
   
   for (size_t i = 0; i < samplesRead; i++) {
@@ -227,29 +260,27 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
       // All zeros
       audioData = 0;
     } else if (sample32 == 0x00000001) {
-      // This is likely a stuck state OR we're reading the wrong bit position
-      // Let's try to extract actual audio data - don't just return 1
-      // The value 0x00000001 might mean audio is in the lower bits
+      // Constant 0x00000001 - this could be:
+      // 1. Microphone stuck (hardware issue)
+      // 2. I2S format/alignment wrong
+      // 3. Data is actually valid but very quiet (near zero)
       
-      // Try extracting from lower 18 bits first
-      int32_t lower18 = (sample32 & 0x3FFFF);
-      if (lower18 & 0x20000) {
-        lower18 |= 0xFFFC0000;  // Sign extend
-      }
-      audioData = lower18 >> 2;
+      // Since hardware is OK, try treating this as valid but quiet audio
+      // The value 0x00000001 might be the microphone's "zero" or "idle" state
+      // Let's extract bit 0 which gives 1, but also log it
       
-      // If that gives 0, log it for debugging
-      static bool loggedExtraction = false;
-      if (!loggedExtraction && audioData == 0) {
-        loggedExtraction = true;
-        LOG_W("Audio", "Raw value 0x00000001 detected - trying alternative extraction");
-        Logger::printf(LOG_INFO, "Audio", "Sample32=0x%08X, trying lower18 extraction", sample32);
+      static bool logged0x01 = false;
+      if (!logged0x01) {
+        logged0x01 = true;
+        LOG_W("Audio", "⚠️  Raw value 0x00000001 detected");
+        LOG_W("Audio", "If hardware is OK, checking if values vary over time...");
+        LOG_W("Audio", "Current extraction: bit 0 = 1 (microphone may be idle/quiet)");
       }
       
-      // If still getting 1, it's truly stuck
-      if (audioData == 0 && (sample32 & 0x01)) {
-        audioData = 1;  // Last resort
-      }
+      // Return 1 for now - if hardware is OK, values should eventually vary
+      audioData = 1;
+      
+      // Note: If raw values start varying, the "else" branch will handle them
     } else {
       // Normal data - try all extraction methods
       
@@ -449,6 +480,7 @@ i2s_config_t AudioManager::getRecordingConfig(uint32_t sampleRate) {
     .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,  // SPH0645 outputs 32-bit!
     .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
     // SPH0645LM4H uses standard I2S format
+    // Try STAND_I2S first, but may need STAND_MSB or I2S_MSB if data is constant
     .communication_format = I2S_COMM_FORMAT_STAND_I2S,
     .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
     .dma_buf_count = DMA_BUFFER_COUNT,
