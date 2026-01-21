@@ -232,90 +232,21 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
     }
   }
   
-  for (size_t i = 0; i < samplesRead; i++) {
-    uint32_t sample32 = i2sBuffer[i];
+  // SPH0645LM4H sends stereo frames (LEFT, RIGHT, LEFT, RIGHT, ...)
+  // SEL = GND means LEFT channel is active
+  // Extract 24-bit signed PCM, MSB-aligned in 32-bit word: shift right by 8
+  // Process only LEFT channel samples (even indices: 0, 2, 4, ...)
+  
+  size_t monoSampleCount = 0;
+  for (size_t i = 0; i < samplesRead; i += 2) {  // Step by 2 to get LEFT channel only
+    if (i >= samplesRead) break;  // Safety check
     
-    // SPH0645LM4H outputs 32-bit words with 18-bit audio data
-    // The format can vary, so try multiple extraction methods
+    uint32_t raw = i2sBuffer[i];  // LEFT channel (even index)
+    // Extract 24-bit signed PCM, MSB-aligned: shift right by 8
+    int32_t rawSigned = (int32_t)raw;
+    int16_t pcm = (int16_t)(rawSigned >> 8);
     
-    int32_t audioData = 0;
-    
-    // Method 1: SPH0645 typically has 18-bit data in bits 14-31 (upper 18 bits)
-    // This is the most common format - take upper 16 bits
-    audioData = (int32_t)((int16_t)(sample32 >> 16));
-    
-    // Method 2: If Method 1 gives constant values, try lower 18 bits (bits 0-17)
-    // Uncomment to try:
-    // if (sample32 == 0x00000001 || sample32 == 0x00000000) {
-    //   // Try extracting from lower bits
-    //   audioData = (int32_t)((int16_t)((sample32 & 0x3FFFF) >> 2));
-    // }
-    
-    // SPH0645LM4H data extraction
-    // The microphone outputs 18-bit audio data in 32-bit words
-    // Format varies: could be in upper bits (14-31) or lower bits (0-17)
-    // Try multiple extraction methods
-    
-    if (sample32 == 0x00000000) {
-      // All zeros
-      audioData = 0;
-    } else if (sample32 == 0x00000001) {
-      // Constant 0x00000001 - this could be:
-      // 1. Microphone stuck (hardware issue)
-      // 2. I2S format/alignment wrong
-      // 3. Data is actually valid but very quiet (near zero)
-      
-      // Since hardware is OK, try treating this as valid but quiet audio
-      // The value 0x00000001 might be the microphone's "zero" or "idle" state
-      // Let's extract bit 0 which gives 1, but also log it
-      
-      static bool logged0x01 = false;
-      if (!logged0x01) {
-        logged0x01 = true;
-        LOG_W("Audio", "⚠️  Raw value 0x00000001 detected");
-        LOG_W("Audio", "If hardware is OK, checking if values vary over time...");
-        LOG_W("Audio", "Current extraction: bit 0 = 1 (microphone may be idle/quiet)");
-      }
-      
-      // Return 1 for now - if hardware is OK, values should eventually vary
-      audioData = 1;
-      
-      // Note: If raw values start varying, the "else" branch will handle them
-    } else {
-      // Normal data - try all extraction methods
-      
-      // Method 1: Upper 16 bits (bits 16-31) - most common
-      audioData = (int32_t)((int16_t)(sample32 >> 16));
-      
-      // Method 2: Bits 14-31 (18-bit left-aligned) - common SPH0645 format
-      if (audioData == 0 && sample32 != 0) {
-        int32_t upper18 = (sample32 >> 14);
-        if (upper18 & 0x20000) {
-          upper18 |= 0xFFFC0000;  // Sign extend
-        }
-        audioData = (int32_t)((int16_t)(upper18 >> 2));
-      }
-      
-      // Method 3: Lower 18 bits (bits 0-17)
-      if (audioData == 0 && sample32 != 0) {
-        int32_t lower18 = (sample32 & 0x3FFFF);
-        if (lower18 & 0x20000) {
-          lower18 |= 0xFFFC0000;  // Sign extend
-        }
-        audioData = lower18 >> 2;
-      }
-      
-      // Method 4: Try bits 15-30 (alternative alignment)
-      if (audioData == 0 && sample32 != 0) {
-        audioData = (int32_t)((int16_t)(sample32 >> 15));
-      }
-    }
-    
-    // Clamp to 16-bit range
-    if (audioData > 32767) audioData = 32767;
-    if (audioData < -32768) audioData = -32768;
-    
-    outputBuffer[i] = (int16_t)audioData;
+    outputBuffer[monoSampleCount++] = pcm;
   }
   
   // Track intermittent zero-data periods for automatic recovery
@@ -410,7 +341,8 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
     }
   }
   
-  return samplesRead * sizeof(int16_t);  // Return bytes of 16-bit samples
+  // Return size reflects mono output (half the stereo samples)
+  return monoSampleCount * sizeof(int16_t);
 }
 
 // ============================================
@@ -477,15 +409,13 @@ i2s_config_t AudioManager::getRecordingConfig(uint32_t sampleRate) {
   i2s_config_t config = {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
     .sample_rate = sampleRate,
-    .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,  // SPH0645 outputs 32-bit!
-    .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-    // SPH0645LM4H uses standard I2S format
-    // Try STAND_I2S first, but may need STAND_MSB or I2S_MSB if data is constant
+    .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,  // SPH0645 outputs 32-bit words
+    .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,  // Stereo frame format
     .communication_format = I2S_COMM_FORMAT_STAND_I2S,
     .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
     .dma_buf_count = DMA_BUFFER_COUNT,
     .dma_buf_len = DMA_BUFFER_SIZE,
-    .use_apll = true,  // Enable APLL for better clock generation (may help LRCLK)
+    .use_apll = true,  // Enable APLL for better clock generation
     .tx_desc_auto_clear = false,
     .fixed_mclk = 0
   };
