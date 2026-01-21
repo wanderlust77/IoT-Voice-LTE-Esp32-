@@ -175,6 +175,86 @@ void setup() {
     return;
   }
   
+  // Wait for I2S to stabilize
+  delay(500);
+  
+  // ========================================
+  // I2S CLOCK DIAGNOSTIC TEST
+  // ========================================
+  LOG_I("Main", "");
+  LOG_I("Main", "========================================");
+  LOG_I("Main", "I2S CLOCK DIAGNOSTIC TEST");
+  LOG_I("Main", "========================================");
+  
+  // Test BCLK (GPIO 26)
+  pinMode(PIN_I2S_BCLK, INPUT);
+  LOG_I("Main", "Testing BCLK (GPIO 26)...");
+  Serial.print("BCLK readings (200 samples): ");
+  int bclkHigh = 0;
+  int bclkLow = 0;
+  for (int i = 0; i < 200; i++) {
+    int val = digitalRead(PIN_I2S_BCLK);
+    if (val == HIGH) bclkHigh++;
+    else bclkLow++;
+    Serial.print(val);
+    delayMicroseconds(5);
+    if (i % 50 == 49) Serial.print(" ");  // Space every 50 readings
+  }
+  Serial.println();
+  Logger::printf(LOG_INFO, "Main", "BCLK: HIGH=%d, LOW=%d", bclkHigh, bclkLow);
+  
+  if (bclkHigh == 0) {
+    LOG_E("Main", "BCLK is stuck LOW - I2S clock not working!");
+  } else if (bclkLow == 0) {
+    LOG_E("Main", "BCLK is stuck HIGH - I2S clock not working!");
+  } else if (bclkHigh < 10 || bclkLow < 10) {
+    LOG_W("Main", "BCLK shows minimal toggling - clock may be slow or not working properly");
+  } else {
+    LOG_I("Main", "BCLK is toggling - clock appears to be working!");
+  }
+  
+  // Test LRCLK (GPIO 25)
+  pinMode(PIN_I2S_LRCLK, INPUT);
+  LOG_I("Main", "Testing LRCLK (GPIO 25)...");
+  Serial.print("LRCLK readings (200 samples): ");
+  int lrclkHigh = 0;
+  int lrclkLow = 0;
+  for (int i = 0; i < 200; i++) {
+    int val = digitalRead(PIN_I2S_LRCLK);
+    if (val == HIGH) lrclkHigh++;
+    else lrclkLow++;
+    Serial.print(val);
+    delayMicroseconds(5);
+    if (i % 50 == 49) Serial.print(" ");  // Space every 50 readings
+  }
+  Serial.println();
+  Logger::printf(LOG_INFO, "Main", "LRCLK: HIGH=%d, LOW=%d", lrclkHigh, lrclkLow);
+  
+  if (lrclkHigh == 0) {
+    LOG_E("Main", "LRCLK is stuck LOW - I2S word clock not working!");
+  } else if (lrclkLow == 0) {
+    LOG_E("Main", "LRCLK is stuck HIGH - I2S word clock not working!");
+  } else if (lrclkHigh < 10 || lrclkLow < 10) {
+    LOG_W("Main", "LRCLK shows minimal toggling - clock may be slow or not working properly");
+  } else {
+    LOG_I("Main", "LRCLK is toggling - word clock appears to be working!");
+  }
+  
+  LOG_I("Main", "========================================");
+  LOG_I("Main", "");
+  
+  // Restore pin modes (I2S will reconfigure them)
+  delay(100);
+  
+  // Restart recording after test
+  audio.stopRecording();
+  delay(100);
+  if (!audio.startRecording(SAMPLE_RATE)) {
+    LOG_E("Main", "Failed to restart recording after clock test");
+    currentState = STATE_ERROR;
+    return;
+  }
+  
   recordedSamples = 0;
   recordingStartTime = millis();
   currentState = STATE_RECORDING;
