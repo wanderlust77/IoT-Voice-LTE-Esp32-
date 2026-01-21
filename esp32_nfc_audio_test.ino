@@ -71,6 +71,11 @@ unsigned long recordingStartTime = 0;
 unsigned long playbackStartTime = 0;
 
 // ============================================
+// FORWARD DECLARATIONS
+// ============================================
+void logHeapStatus();
+
+// ============================================
 // SETUP
 // ============================================
 void setup() {
@@ -368,75 +373,6 @@ void loop() {
       
       // Continue recording indefinitely (no timeout)
       // User can reset to stop
-      break;
-        // Recording complete
-        audio.stopRecording();
-        LOG_I("Main", "========================================");
-        Logger::printf(LOG_INFO, "Main", "Recording complete! Captured %d samples", recordedSamples);
-        
-        // Detailed analysis of recorded audio
-        LOG_I("Main", "Analyzing recorded audio data...");
-        
-        int32_t maxSample = 0;
-        int32_t minSample = 0;
-        int64_t sumSamples = 0;
-        int32_t zeroCount = 0;
-        
-        for (size_t i = 0; i < recordedSamples; i++) {
-          int32_t val = audioBuffer[i];
-          if (val > maxSample) maxSample = val;
-          if (val < minSample) minSample = val;
-          sumSamples += (val > 0 ? val : -val);  // Absolute value sum
-          if (val == 0) zeroCount++;
-        }
-        
-        int32_t avgAbs = (recordedSamples > 0) ? (sumSamples / recordedSamples) : 0;
-        
-        Logger::printf(LOG_INFO, "Main", "Audio range: %d to %d (max possible: ±32768)", minSample, maxSample);
-        Logger::printf(LOG_INFO, "Main", "Average absolute value: %d", avgAbs);
-        Logger::printf(LOG_INFO, "Main", "Zero samples: %d / %d (%.1f%%)", 
-                      zeroCount, recordedSamples, (float)zeroCount / recordedSamples * 100.0f);
-        
-        // Show first 20 samples
-        Serial.print("[DATA] First 20 samples: ");
-        int showCount = (recordedSamples < 20) ? recordedSamples : 20;
-        for (int i = 0; i < showCount; i++) {
-          Serial.print(audioBuffer[i]);
-          if (i < showCount - 1) Serial.print(", ");
-        }
-        Serial.println();
-        
-        // Show last 20 samples
-        if (recordedSamples > 20) {
-          Serial.print("[DATA] Last 20 samples: ");
-          int startIdx = recordedSamples - 20;
-          for (int i = 0; i < 20; i++) {
-            Serial.print(audioBuffer[startIdx + i]);
-            if (i < 19) Serial.print(", ");
-          }
-          Serial.println();
-        }
-        
-        if (maxSample == 0 && minSample == 0) {
-          LOG_W("Main", "WARNING: All samples are zero! Microphone may not be working.");
-        } else if (zeroCount > recordedSamples * 0.95f) {
-          LOG_W("Main", "WARNING: >95%% samples are zero! Microphone may not be working.");
-        } else if (avgAbs < 100) {
-          LOG_W("Main", "WARNING: Very low audio levels (avg_abs=%d). Check microphone.");
-        } else {
-          int32_t absMax = (maxSample > 0) ? maxSample : -maxSample;
-          int32_t absMin = (minSample > 0) ? minSample : -minSample;
-          int32_t peak = (absMax > absMin) ? absMax : absMin;
-          float peakLevel = (float)peak / 32768.0f * 100.0f;
-          Logger::printf(LOG_INFO, "Main", "Peak level: %.1f%% of maximum", peakLevel);
-          LOG_I("Main", "Audio capture looks good!");
-        }
-        
-        logHeapStatus();
-        Logger::printf(LOG_INFO, "Main", "Long-press button to play back (gain: %.1fx)", AUDIO_GAIN_MULTIPLIER);
-        LOG_I("Main", "========================================");
-        currentState = STATE_READING_NFC;
-      }
       break;
     }
     
