@@ -290,6 +290,18 @@ void loop() {
       if (bytesRead > 0) {
         size_t samplesRead = bytesRead / sizeof(int16_t);
         
+        // Log all audio data
+        Serial.print("[DATA] Samples [");
+        Serial.print(recordedSamples);
+        Serial.print("..");
+        Serial.print(recordedSamples + samplesRead - 1);
+        Serial.print("]: ");
+        for (size_t i = 0; i < samplesRead; i++) {
+          Serial.print(readBuffer[i]);
+          if (i < samplesRead - 1) Serial.print(", ");
+        }
+        Serial.println();
+        
         // Copy samples to main buffer
         if (recordedSamples + samplesRead <= audioBufferSize) {
           memcpy(&audioBuffer[recordedSamples], readBuffer, bytesRead);
