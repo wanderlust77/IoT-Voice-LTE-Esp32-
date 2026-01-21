@@ -108,21 +108,70 @@ bool AudioManager::startRecording(uint32_t sampleRate) {
 // ============================================
 // READ RECORDED DATA
 // ============================================
+// SPH0645LM4H outputs 32-bit samples with 18-bit audio data (left-aligned)
+// We need to extract the 18-bit data and convert to 16-bit
 size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
   if (currentMode != AUDIO_MODE_RECORDING) {
     LOG_E("Audio", "Not in recording mode");
     return 0;
   }
   
+  // Read 32-bit samples from I2S
+  // Allocate temporary buffer for 32-bit samples
+  static uint32_t i2sBuffer[256];  // Max 256 samples at a time
+  size_t samplesToRead = (maxLength / sizeof(int16_t)) < 256 ? (maxLength / sizeof(int16_t)) : 256;
+  size_t bytesToRead = samplesToRead * sizeof(uint32_t);  // 32-bit samples from I2S
+  
   size_t bytesRead = 0;
-  esp_err_t result = i2s_read(I2S_PORT, buffer, maxLength, &bytesRead, portMAX_DELAY);
+  esp_err_t result = i2s_read(I2S_PORT, i2sBuffer, bytesToRead, &bytesRead, 0);  // Non-blocking
   
   if (result != ESP_OK) {
     Logger::printf(LOG_ERROR, "Audio", "I2S read failed: %d", result);
     return 0;
   }
   
-  return bytesRead;
+  if (bytesRead == 0) {
+    return 0;  // No data available
+  }
+  
+  // Convert 32-bit samples to 16-bit
+  // SPH0645LM4H outputs 32-bit words with 18-bit audio data
+  // The format is: bits 0-17 contain 18-bit left-aligned audio data
+  // We need to extract and convert to 16-bit
+  size_t samplesRead = bytesRead / sizeof(uint32_t);
+  int16_t* outputBuffer = (int16_t*)buffer;
+  
+  static bool firstRead = true;
+  if (firstRead && samplesRead > 0) {
+    firstRead = false;
+    Logger::printf(LOG_INFO, "Audio", "First raw 32-bit samples (hex): %08X, %08X, %08X", 
+                   i2sBuffer[0], i2sBuffer[1], i2sBuffer[2]);
+  }
+  
+  for (size_t i = 0; i < samplesRead; i++) {
+    uint32_t sample32 = i2sBuffer[i];
+    
+    // SPH0645LM4H outputs 32-bit words with 18-bit audio data
+    // The exact format varies, so try different extraction methods
+    
+    int32_t audioData;
+    
+    // Method 1: SPH0645 typically has data in upper 18 bits (bits 14-31)
+    // Take upper 16 bits directly (most common format)
+    audioData = (int32_t)((int16_t)(sample32 >> 16));
+    
+    // Method 2: If that doesn't work, try lower 18 bits (bits 0-17)
+    // Uncomment this if Method 1 gives poor results:
+    // audioData = (int32_t)((int16_t)(sample32 & 0x3FFFF) >> 2);
+    
+    // Clamp to 16-bit range (shouldn't be needed but safe)
+    if (audioData > 32767) audioData = 32767;
+    if (audioData < -32768) audioData = -32768;
+    
+    outputBuffer[i] = (int16_t)audioData;
+  }
+  
+  return samplesRead * sizeof(int16_t);  // Return bytes of 16-bit samples
 }
 
 // ============================================
