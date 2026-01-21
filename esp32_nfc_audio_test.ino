@@ -157,7 +157,8 @@ void setup() {
   LOG_I("Main", "========================================");
   LOG_I("Main", "Initialization complete!");
   LOG_I("Main", "");
-  LOG_I("Main", "AUTO-RECORDING MODE: Starting automatic recording...");
+  LOG_I("Main", "CONTINUOUS AUDIO DISPLAY MODE");
+  LOG_I("Main", "Starting automatic continuous reading...");
   LOG_I("Main", "========================================");
   
   logHeapStatus();
@@ -173,8 +174,13 @@ void setup() {
   recordingStartTime = millis();
   currentState = STATE_RECORDING;
   
-  LOG_I("Main", "Recording started automatically - speak into microphone!");
-  LOG_I("Main", "Recording for 3 seconds...");
+  LOG_I("Main", "========================================");
+  LOG_I("Main", "CONTINUOUS AUDIO MONITORING ACTIVE");
+  LOG_I("Main", "Speak into microphone - data will display continuously");
+  LOG_I("Main", "Watch Serial Monitor for real-time audio data");
+  LOG_I("Main", "Press RESET button to stop");
+  LOG_I("Main", "========================================");
+  Serial.println();
 }
 
 // ============================================
@@ -280,66 +286,89 @@ void loop() {
     }
     
     // ----------------------------------------
-    // RECORDING STATE
+    // RECORDING STATE - CONTINUOUS DISPLAY MODE
     // ----------------------------------------
     case STATE_RECORDING: {
-      // Record for 3 seconds
-      const uint32_t RECORD_DURATION_MS = 3000;
+      // Continuous reading mode - no time limit
+      static int16_t displayBuffer[100];  // Buffer for displaying samples
+      static size_t displayIndex = 0;
+      static unsigned long lastDisplay = 0;
+      static unsigned long lastStats = 0;
+      static int readCount = 0;
       
-      if (millis() - recordingStartTime < RECORD_DURATION_MS) {
-        // Read bytes from microphone
-        size_t bytesAvailable = (audioBufferSize - recordedSamples) * sizeof(int16_t);
-        if (bytesAvailable > 0) {
-          uint8_t* bufferPtr = (uint8_t*)(audioBuffer + recordedSamples);
-          size_t bytesRead = audio.readRecordedData(bufferPtr, bytesAvailable);
-          recordedSamples += bytesRead / sizeof(int16_t);
-        }
+      // Read bytes from microphone continuously
+      size_t bytesAvailable = sizeof(displayBuffer);
+      uint8_t* bufferPtr = (uint8_t*)displayBuffer;
+      size_t bytesRead = audio.readRecordedData(bufferPtr, bytesAvailable);
+      
+      if (bytesRead > 0) {
+        size_t samplesRead = bytesRead / sizeof(int16_t);
+        readCount++;
         
-        // Progress indicator and sample logging every 500ms
-        static unsigned long lastProgress = 0;
-        static unsigned long lastSampleLog = 0;
-        if (millis() - lastProgress > 500) {
-          lastProgress = millis();
-          float elapsed = (float)(millis() - recordingStartTime) / 1000.0f;
-          Logger::printf(LOG_INFO, "Main", "Recording... %.1fs / 3.0s (samples: %d)", elapsed, recordedSamples);
-        }
-        
-        // Log sample data every 200ms (show raw values)
-        if (millis() - lastSampleLog > 200 && recordedSamples > 0) {
-          lastSampleLog = millis();
+        // Display raw samples every 200ms
+        if (millis() - lastDisplay > 200) {
+          lastDisplay = millis();
           
-          // Show last 10 samples
-          int startIdx = (recordedSamples >= 10) ? recordedSamples - 10 : 0;
-          int count = (recordedSamples >= 10) ? 10 : recordedSamples;
-          
-          Serial.print("[DATA] Samples [");
-          Serial.print(startIdx);
-          Serial.print("..");
-          Serial.print(startIdx + count - 1);
+          Serial.print("[DATA] Read #");
+          Serial.print(readCount);
+          Serial.print(" - Samples [0..");
+          Serial.print(samplesRead - 1);
           Serial.print("]: ");
           
-          for (int i = 0; i < count; i++) {
-            Serial.print(audioBuffer[startIdx + i]);
-            if (i < count - 1) Serial.print(", ");
+          for (size_t i = 0; i < samplesRead && i < 20; i++) {  // Show first 20
+            Serial.print(displayBuffer[i]);
+            if (i < samplesRead - 1 && i < 19) Serial.print(", ");
           }
           Serial.println();
+        }
+        
+        // Calculate and display statistics every 500ms
+        if (millis() - lastStats > 500) {
+          lastStats = millis();
           
-          // Calculate and show statistics for current chunk
           int32_t chunkMin = 32767;
           int32_t chunkMax = -32768;
-          int32_t chunkSum = 0;
-          for (int i = startIdx; i < startIdx + count; i++) {
-            int32_t val = audioBuffer[i];
+          int64_t chunkSum = 0;
+          int zeroCount = 0;
+          
+          for (size_t i = 0; i < samplesRead; i++) {
+            int32_t val = displayBuffer[i];
             if (val < chunkMin) chunkMin = val;
             if (val > chunkMax) chunkMax = val;
             chunkSum += (val > 0 ? val : -val);  // Absolute sum
+            if (val == 0) zeroCount++;
           }
-          int32_t chunkAvg = chunkSum / count;
           
-          Logger::printf(LOG_INFO, "Main", "Chunk stats: min=%d, max=%d, avg_abs=%d", 
-                        chunkMin, chunkMax, chunkAvg);
+          int32_t chunkAvg = (samplesRead > 0) ? (chunkSum / samplesRead) : 0;
+          float zeroPercent = (samplesRead > 0) ? ((float)zeroCount / samplesRead * 100.0f) : 0.0f;
+          
+          Logger::printf(LOG_INFO, "Main", "=== Audio Stats (read #%d) ===", readCount);
+          Logger::printf(LOG_INFO, "Main", "Range: %d to %d (max: ±32768)", chunkMin, chunkMax);
+          Logger::printf(LOG_INFO, "Main", "Avg abs: %d, Zero samples: %d (%.1f%%)", 
+                        chunkAvg, zeroCount, zeroPercent);
+          
+          if (chunkMax == 0 && chunkMin == 0) {
+            LOG_W("Main", "WARNING: All samples are ZERO - microphone not sending data!");
+          } else if (chunkAvg < 10) {
+            LOG_W("Main", "WARNING: Very low audio levels - check microphone wiring!");
+          } else {
+            float peakPercent = ((float)((chunkMax > -chunkMin) ? chunkMax : -chunkMin) / 32768.0f) * 100.0f;
+            Logger::printf(LOG_INFO, "Main", "Peak level: %.1f%% - Audio looks good!", peakPercent);
+          }
+          Serial.println();
         }
       } else {
+        // No data available - log occasionally
+        static int noDataCount = 0;
+        noDataCount++;
+        if (noDataCount == 1 || noDataCount % 50 == 0) {
+          Logger::printf(LOG_INFO, "Main", "No I2S data available (read attempt #%d)", noDataCount);
+        }
+      }
+      
+      // Continue recording indefinitely (no timeout)
+      // User can reset to stop
+      break;
         // Recording complete
         audio.stopRecording();
         LOG_I("Main", "========================================");
