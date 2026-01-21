@@ -130,11 +130,17 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
   size_t bytesRead = 0;
   esp_err_t result = i2s_read(I2S_PORT, i2sBuffer, bytesToRead, &bytesRead, 0);  // Non-blocking
   
-  static bool firstCall = true;
-  if (firstCall) {
-    firstCall = false;
-    Logger::printf(LOG_INFO, "Audio", "First I2S read: result=%d, bytesRead=%d, bytesToRead=%d", 
-                   result, bytesRead, bytesToRead);
+  static int readCallCount = 0;
+  readCallCount++;
+  
+  // Log first few reads with details
+  if (readCallCount <= 5) {
+    Logger::printf(LOG_INFO, "Audio", "I2S read #%d: result=%d, bytesRead=%d, bytesToRead=%d", 
+                   readCallCount, result, bytesRead, bytesToRead);
+    if (bytesRead > 0) {
+      Logger::printf(LOG_INFO, "Audio", "Raw 32-bit (hex): %08X, %08X, %08X, %08X", 
+                     i2sBuffer[0], i2sBuffer[1], i2sBuffer[2], i2sBuffer[3]);
+    }
   }
   
   if (result != ESP_OK) {
@@ -148,6 +154,12 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
   
   if (bytesRead == 0) {
     // This is normal if no data is available yet (non-blocking mode)
+    // But log it occasionally so we know what's happening
+    static int zeroReadCount = 0;
+    zeroReadCount++;
+    if (zeroReadCount == 1 || zeroReadCount % 100 == 0) {
+      Logger::printf(LOG_INFO, "Audio", "I2S read returned 0 bytes (call #%d) - this is normal if buffer empty", zeroReadCount);
+    }
     return 0;
   }
   
@@ -158,12 +170,12 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
   size_t samplesRead = bytesRead / sizeof(uint32_t);
   int16_t* outputBuffer = (int16_t*)buffer;
   
-  static bool firstRead = true;
-  if (firstRead && samplesRead > 0) {
-    firstRead = false;
-    Logger::printf(LOG_INFO, "Audio", "First raw 32-bit samples (hex): %08X, %08X, %08X, %08X", 
-                   i2sBuffer[0], i2sBuffer[1], i2sBuffer[2], i2sBuffer[3]);
-    Logger::printf(LOG_INFO, "Audio", "Samples read: %d, Bytes read: %d", samplesRead, bytesRead);
+  // Log raw values periodically (every 50 reads with data)
+  static int dataReadCount = 0;
+  dataReadCount++;
+  if (dataReadCount <= 3 || dataReadCount % 50 == 0) {
+    Logger::printf(LOG_INFO, "Audio", "Data read #%d: samples=%d, raw[0]=%08X, raw[1]=%08X", 
+                   dataReadCount, samplesRead, i2sBuffer[0], i2sBuffer[1]);
   }
   
   for (size_t i = 0; i < samplesRead; i++) {
