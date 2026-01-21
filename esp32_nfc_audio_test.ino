@@ -319,7 +319,7 @@ void loop() {
         audio.stopRecording();
         LOG_I("Main", "========================================");
         Logger::printf(LOG_INFO, "Main", "Recording complete! Captured %d samples", recordedSamples);
-        LOG_I("Main", "Long-press button to play back (gain: %.1fx)", AUDIO_GAIN_MULTIPLIER);
+        Logger::printf(LOG_INFO, "Main", "Long-press button to play back (gain: %.1fx)", AUDIO_GAIN_MULTIPLIER);
         LOG_I("Main", "========================================");
         currentState = STATE_READING_NFC;
       }
