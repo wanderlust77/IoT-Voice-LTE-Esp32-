@@ -102,11 +102,14 @@ bool AudioManager::startRecording(uint32_t sampleRate) {
   i2s_zero_dma_buffer(I2S_PORT);
   
   // Wait a bit for microphone to stabilize and start outputting data
-  delay(100);
+  delay(500);  // Increased delay for microphone to stabilize
   
   LOG_I("Audio", "Recording mode ready");
-  Logger::printf(LOG_INFO, "Audio", "I2S configured: %lu Hz, 32-bit, RX mode, pins: BCLK=%d, LRCLK=%d, DATA=%d", 
-                 sampleRate, pinBclk, pinLrclk, pinMicData);
+  Logger::printf(LOG_INFO, "Audio", "I2S configured: %lu Hz, 32-bit, RX mode", sampleRate);
+  Logger::printf(LOG_INFO, "Audio", "Pins: BCLK=GPIO%d, LRCLK=GPIO%d, DATA=GPIO%d", 
+                 pinBclk, pinLrclk, pinMicData);
+  Logger::printf(LOG_INFO, "Audio", "Format: STAND_I2S, Channel: LEFT only");
+  LOG_I("Audio", "NOTE: Verify BCLK and LRCLK are generating clocks!");
   return true;
 }
 
@@ -197,13 +200,23 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
     //   audioData = (int32_t)((int16_t)((sample32 & 0x3FFFF) >> 2));
     // }
     
-    // Method 3: If raw value is 0x00000001, it might be in a different position
-    // Try shifting by different amounts
+    // If raw value is constant 0x00000001, the microphone is likely:
+    // 1. Not receiving I2S clocks (BCLK/LRCLK) - MOST LIKELY
+    // 2. In wrong I2S format
+    // 3. Not powered correctly
+    // The value 0x00000001 when shifted >> 16 gives 0, but we're seeing 1,
+    // which means we might be reading the wrong bit or the mic is stuck
     if (sample32 == 0x00000001) {
-      // This constant value suggests SEL pin issue or wrong format
-      // Try extracting from bit position 0 directly
-      audioData = (sample32 & 0x01) ? 1 : 0;  // This will give 1, not 0
-      // But this is wrong - if we're getting 0x00000001, the mic might be stuck
+      // This is a stuck/invalid state - log it once
+      static bool loggedStuckState = false;
+      if (!loggedStuckState) {
+        loggedStuckState = true;
+        LOG_W("Audio", "WARNING: Constant 0x00000001 detected!");
+        LOG_W("Audio", "Possible causes: 1) I2S clocks not working, 2) Wrong I2S format, 3) Mic not powered");
+        LOG_W("Audio", "Check: BCLK/LRCLK signals, I2S format, microphone power");
+      }
+      // Extract bit 0 (gives 1) - this is wrong but shows we're reading something
+      audioData = (sample32 & 0x01) ? 1 : 0;
     }
     
     // Clamp to 16-bit range
@@ -290,11 +303,13 @@ i2s_config_t AudioManager::getRecordingConfig(uint32_t sampleRate) {
     .sample_rate = sampleRate,
     .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,  // SPH0645 outputs 32-bit!
     .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-    .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+    // SPH0645LM4H uses I2S format with MSB first
+    // Try STAND_I2S first, but may need I2S_COMM_FORMAT_STAND_MSB
+    .communication_format = (i2s_comm_format_t)(I2S_COMM_FORMAT_STAND_I2S | I2S_COMM_FORMAT_I2S),
     .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
     .dma_buf_count = DMA_BUFFER_COUNT,
     .dma_buf_len = DMA_BUFFER_SIZE,
-    .use_apll = false,
+    .use_apll = false,  // Set to true for better clock accuracy
     .tx_desc_auto_clear = false,
     .fixed_mclk = 0
   };
