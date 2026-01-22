@@ -7,6 +7,7 @@
 #include "audio_manager.h"
 #include "logger.h"
 #include "config.h"
+#include "soc/i2s_reg.h"  // For I2S register definitions
 
 // I2S port numbers - use separate ports for mic and amp
 #define I2S_PORT_RECORDING I2S_NUM_0  // Microphone (RX)
@@ -492,6 +493,11 @@ bool AudioManager::reconfigureI2S(AudioMode newMode, uint32_t sampleRate) {
       return false;
     }
     Logger::printf(LOG_INFO, "Audio", "I2S RX mode started explicitly (I2S_NUM_0)");
+    
+    // Fix ESP32 I2S RX timing for SPH0645 microphone
+    // Enable RX MSB shift to align ESP32 sampling with SPH0645 I2S timing
+    SET_PERI_REG_MASK(I2S_RX_CONF1_REG(I2S_NUM_0), I2S_RX_MSB_SHIFT);
+    Logger::printf(LOG_INFO, "Audio", "Enabled RX MSB shift for SPH0645 timing alignment");
     
     // ESP32 I2S RX mode: LRCLK may not toggle until DMA is actively reading
     // Trigger a read to start the DMA and generate LRCLK
