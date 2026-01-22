@@ -5,7 +5,7 @@
  * 
  * Features:
  * - Read NFC tag (NTAG213/215) UID
- * - Record audio on button short press (15 seconds)
+ * - Record audio on button short press (7 seconds)
  * - Playback recorded audio on button long press
  * - All local (no network/LTE)
  * 
@@ -42,10 +42,10 @@ ErrorCode lastError = ERROR_NONE;
 // AUDIO BUFFER (LOCAL STORAGE)
 // ============================================
 // Note: If allocation fails, reduce this value:
-//   * 15 seconds = 661KB at 22kHz (recommended)
-//   * 10 seconds = 441KB at 22kHz (if 15s fails)
+//   * 7 seconds = 309KB at 22kHz (fits in ~346KB free heap)
+//   * 10 seconds = 320KB at 16kHz (alternative: longer but lower quality)
 //   * 5 seconds  = 220KB at 22kHz (minimal)
-#define MAX_AUDIO_SAMPLES  (SAMPLE_RATE * 15)  // 15 seconds max at 22.05kHz (661KB)
+#define MAX_AUDIO_SAMPLES  (SAMPLE_RATE * 7)  // 7 seconds max at 22.05kHz (309KB)
 int16_t* audioBuffer = nullptr;
 size_t audioBufferSize = 0;
 size_t recordedSamples = 0;
@@ -176,7 +176,7 @@ void setup() {
   LOG_I("Main", "");
   LOG_I("Main", "Usage:");
   LOG_I("Main", "1. Present NFC tag to reader");
-  LOG_I("Main", "2. SHORT press button → Record 15 seconds");
+  LOG_I("Main", "2. SHORT press button → Record 7 seconds");
   LOG_I("Main", "3. LONG press button → Playback recording");
   LOG_I("Main", "========================================");
   
@@ -227,7 +227,7 @@ void loop() {
       if (button.wasShortPress()) {
         // Start recording
         LOG_I("Main", "========================================");
-        LOG_I("Main", "Recording audio (15 seconds)...");
+        LOG_I("Main", "Recording audio (7 seconds)...");
         LOG_I("Main", "Speak into microphone!");
         LOG_I("Main", "========================================");
         
@@ -308,13 +308,13 @@ void loop() {
         static unsigned long lastProgress = 0;
         if (millis() - lastProgress > 500) {
           lastProgress = millis();
-          Logger::printf(LOG_INFO, "Main", "Recording... %.1fs / 15.0s (samples: %d)", 
+          Logger::printf(LOG_INFO, "Main", "Recording... %.1fs / 7.0s (samples: %d)", 
                         elapsed / 1000.0f, recordedSamples);
         }
       }
       
-      // Check if 15 seconds have elapsed
-      if (millis() - recordingStartTime >= 15000) {
+      // Check if 7 seconds have elapsed
+      if (millis() - recordingStartTime >= 7000) {
         // Recording complete
         audio.stopRecording();
         LOG_I("Main", "========================================");
