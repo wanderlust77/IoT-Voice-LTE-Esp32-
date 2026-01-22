@@ -232,19 +232,22 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
     }
   }
   
-  // SPH0645LM4H sends stereo frames (LEFT, RIGHT, LEFT, RIGHT, ...)
-  // SEL = GND means LEFT channel is active
-  // Extract 24-bit signed PCM, MSB-aligned in 32-bit word: shift right by 8
-  // Process only LEFT channel samples (even indices: 0, 2, 4, ...)
+  // SPH0645LM4H: 24-bit signed audio left-justified in 32-bit word
+  // Data is in bits [31:8], bits [7:0] are padding
+  // Driver configured for LEFT channel only, so all samples are mono
+  // Properly sign-extend 24-bit sample before converting to 16-bit PCM
   
   size_t monoSampleCount = 0;
-  for (size_t i = 0; i < samplesRead; i += 2) {  // Step by 2 to get LEFT channel only
-    if (i >= samplesRead) break;  // Safety check
+  for (size_t i = 0; i < samplesRead; i++) {
+    uint32_t raw = i2sBuffer[i];
     
-    uint32_t raw = i2sBuffer[i];  // LEFT channel (even index)
-    // Extract 24-bit signed PCM, MSB-aligned: shift right by 8
-    int32_t rawSigned = (int32_t)raw;
-    int16_t pcm = (int16_t)(rawSigned >> 8);
+    // Extract 24-bit signed PCM from bits [31:8]
+    // Cast to int32_t first, then shift: this preserves sign bit (bit 31)
+    // Right-shift by 8 moves 24-bit data to bits [23:0], with automatic sign extension
+    int32_t sample24bit = ((int32_t)raw) >> 8;  // Sign-extends correctly from bit 31
+    
+    // Convert to 16-bit PCM: shift right by 8 more bits (truncate lower 8 bits of 24-bit sample)
+    int16_t pcm = (int16_t)(sample24bit >> 8);
     
     outputBuffer[monoSampleCount++] = pcm;
   }
@@ -341,7 +344,7 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
     }
   }
   
-  // Return size reflects mono output (half the stereo samples)
+  // Return size reflects mono output (driver delivers mono directly)
   return monoSampleCount * sizeof(int16_t);
 }
 
@@ -405,12 +408,12 @@ i2s_pin_config_t AudioManager::getPlaybackPins() {
 // ============================================
 // GET RECORDING CONFIGURATION
 // ============================================
-i2s_config_t AudioManager::getRecordingConfig(uint32_t sampleRate) {
+  i2s_config_t AudioManager::getRecordingConfig(uint32_t sampleRate) {
   i2s_config_t config = {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
     .sample_rate = sampleRate,
     .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,  // SPH0645 outputs 32-bit words
-    .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,  // Stereo frame format
+    .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,  // Configure driver for mono (LEFT channel only)
     .communication_format = I2S_COMM_FORMAT_STAND_I2S,
     .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
     .dma_buf_count = DMA_BUFFER_COUNT,

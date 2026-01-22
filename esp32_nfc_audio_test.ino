@@ -55,8 +55,8 @@ size_t recordedSamples = 0;
 // ============================================
 // Software gain multiplier (1.0 = normal, 2.0 = 2x louder, etc.)
 // MAX98357A with floating GAIN pin = 15dB hardware gain
-// Increase this if audio is too quiet
-#define AUDIO_GAIN_MULTIPLIER  3.0f  // 3x software gain (adjust as needed)
+// Reduced to 1.0 after proper 24-bit sign-extended extraction
+#define AUDIO_GAIN_MULTIPLIER  1.0f  // Normal gain (no software amplification)
 
 // ============================================
 // NFC DATA
@@ -377,6 +377,21 @@ void loop() {
         
         // Final statistics on entire recording
         if (recordedSamples > 0) {
+          // Compute DC offset (average of all samples)
+          int32_t sum = 0;
+          for (size_t i = 0; i < recordedSamples; i++) {
+            sum += (int32_t)audioBuffer[i];
+          }
+          int32_t dcOffset = sum / (int32_t)recordedSamples;
+          
+          // Remove DC offset from all samples
+          for (size_t i = 0; i < recordedSamples; i++) {
+            audioBuffer[i] = (int16_t)((int32_t)audioBuffer[i] - dcOffset);
+          }
+          
+          Logger::printf(LOG_INFO, "Main", "DC offset removed: %d", dcOffset);
+          
+          // Compute statistics after DC removal
           int16_t minVal = audioBuffer[0];
           int16_t maxVal = audioBuffer[0];
           int32_t sumAbs = 0;
