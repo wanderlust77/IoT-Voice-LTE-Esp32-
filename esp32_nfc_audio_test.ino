@@ -5,7 +5,7 @@
  * 
  * Features:
  * - Read NFC tag (NTAG213/215) UID
- * - Record audio on button short press (5 seconds)
+ * - Record audio on button short press (3 seconds)
  * - Playback recorded audio on button long press
  * - All local (no network/LTE)
  * 
@@ -43,10 +43,10 @@ ErrorCode lastError = ERROR_NONE;
 // AUDIO BUFFER (LOCAL STORAGE)
 // ============================================
 // Note: If allocation fails, reduce this value:
-//   * 5 seconds = 220KB at 22kHz (recommended - fits even with fragmentation)
-//   * 4 seconds = 176KB at 22kHz (fallback if 5s fails)
-//   * 10 seconds = 320KB at 16kHz (alternative: longer but lower quality)
-#define MAX_AUDIO_SAMPLES  (SAMPLE_RATE * 5)  // 5 seconds max at 22.05kHz (220KB)
+//   * 3 seconds = 96KB at 16kHz (fits in 114KB largest free block)
+//   * 2 seconds = 64KB at 16kHz (fallback if 3s fails)
+//   * 4 seconds = 128KB at 16kHz (if heap defragmentation improves)
+#define MAX_AUDIO_SAMPLES  (SAMPLE_RATE * 3)  // 3 seconds max at 16kHz (96KB)
 int16_t* audioBuffer = nullptr;
 size_t audioBufferSize = 0;
 size_t recordedSamples = 0;
@@ -116,9 +116,9 @@ void setup() {
     Logger::printf(LOG_ERROR, "Main", "Insufficient contiguous heap! Need %d bytes, largest block: %d bytes", 
                    bufferBytes, largestFreeBlock);
     // Try smaller buffer as fallback
-    size_t fallbackSamples = SAMPLE_RATE * 4;  // 4 seconds
+    size_t fallbackSamples = SAMPLE_RATE * 2;  // 2 seconds
     size_t fallbackBytes = fallbackSamples * sizeof(int16_t);
-    Logger::printf(LOG_WARN, "Main", "Trying fallback: %d bytes (%d samples, 4 seconds)", 
+    Logger::printf(LOG_WARN, "Main", "Trying fallback: %d bytes (%d samples, 2 seconds)", 
                    fallbackBytes, fallbackSamples);
     
     if (largestFreeBlock >= fallbackBytes) {
@@ -127,6 +127,10 @@ void setup() {
     } else {
       Logger::printf(LOG_ERROR, "Main", "Fallback also too large! Need %d bytes, have %d bytes", 
                      fallbackBytes, largestFreeBlock);
+      Logger::printf(LOG_ERROR, "Main", "Heap is severely fragmented. Try:");
+      Logger::printf(LOG_ERROR, "Main", "  1. Restart ESP32 to defragment heap");
+      Logger::printf(LOG_ERROR, "Main", "  2. Reduce MAX_AUDIO_SAMPLES further");
+      Logger::printf(LOG_ERROR, "Main", "  3. Disable other features to free memory");
       currentState = STATE_ERROR;
       return;
     }
@@ -200,7 +204,7 @@ void setup() {
   LOG_I("Main", "");
   LOG_I("Main", "Usage:");
   LOG_I("Main", "1. Present NFC tag to reader");
-  LOG_I("Main", "2. SHORT press button → Record 5 seconds");
+  LOG_I("Main", "2. SHORT press button → Record 3 seconds");
   LOG_I("Main", "3. LONG press button → Playback recording");
   LOG_I("Main", "========================================");
   
@@ -251,7 +255,7 @@ void loop() {
       if (button.wasShortPress()) {
         // Start recording
         LOG_I("Main", "========================================");
-        LOG_I("Main", "Recording audio (5 seconds)...");
+        LOG_I("Main", "Recording audio (3 seconds)...");
         LOG_I("Main", "Speak into microphone!");
         LOG_I("Main", "========================================");
         
@@ -332,13 +336,13 @@ void loop() {
         static unsigned long lastProgress = 0;
         if (millis() - lastProgress > 500) {
           lastProgress = millis();
-          Logger::printf(LOG_INFO, "Main", "Recording... %.1fs / 5.0s (samples: %d)", 
+          Logger::printf(LOG_INFO, "Main", "Recording... %.1fs / 3.0s (samples: %d)", 
                         elapsed / 1000.0f, recordedSamples);
         }
       }
       
-      // Check if 5 seconds have elapsed
-      if (millis() - recordingStartTime >= 5000) {
+      // Check if 3 seconds have elapsed
+      if (millis() - recordingStartTime >= 3000) {
         // Recording complete
         audio.stopRecording();
         LOG_I("Main", "========================================");

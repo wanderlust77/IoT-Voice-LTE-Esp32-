@@ -244,7 +244,7 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
   // DC Offset Removal Filter
   // Uses a running average (IIR high-pass) to track and remove DC bias
   // Algorithm: dc_estimate slowly tracks DC component, then subtract it from signal
-  // Filter coefficient N=7: time constant ≈ 128 samples (5.8ms at 22.05kHz)
+  // Filter coefficient N=7: time constant ≈ 128 samples (8ms at 16kHz)
   // Integer-only math for embedded real-time processing
   static int32_t dc_estimate = 0;  // Running estimate of DC offset
   const int N = 7;  // Filter coefficient: 1/128 per sample (slow DC tracking)

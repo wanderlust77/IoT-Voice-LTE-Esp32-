@@ -13,7 +13,7 @@
 // ============================================
 // AUDIO CONFIGURATION
 // ============================================
-#define SAMPLE_RATE           22050  // Hz (22.05 kHz for better voice quality)
+#define SAMPLE_RATE           16000  // Hz (16 kHz - optimized for memory constraints)
 #define BITS_PER_SAMPLE       16     // 16-bit PCM
 #define DMA_BUFFER_COUNT      4      // Number of DMA buffers
 #define DMA_BUFFER_SIZE       512    // Samples per DMA buffer
