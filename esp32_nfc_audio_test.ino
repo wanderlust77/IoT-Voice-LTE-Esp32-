@@ -448,10 +448,11 @@ void loop() {
         
         if (playbackIndex < recordedSamples) {
           // Apply software gain and prepare audio chunk
-          size_t samplesToProcess = min((size_t)256, recordedSamples - playbackIndex);
-          static int16_t gainBuffer[256];  // Temporary buffer for gain-adjusted samples
+          // MAX98357A expects stereo format, so duplicate mono samples to both channels
+          size_t samplesToProcess = min((size_t)128, recordedSamples - playbackIndex);  // Reduced because we're doubling for stereo
+          static int16_t stereoBuffer[256];  // Stereo buffer: [L, R, L, R, ...]
           
-          // Apply gain multiplier to samples
+          // Convert mono to stereo: duplicate each sample to both left and right channels
           for (size_t i = 0; i < samplesToProcess; i++) {
             int32_t sample = (int32_t)audioBuffer[playbackIndex + i];
             sample = (int32_t)(sample * AUDIO_GAIN_MULTIPLIER);
@@ -460,13 +461,16 @@ void loop() {
             if (sample > 32767) sample = 32767;
             if (sample < -32768) sample = -32768;
             
-            gainBuffer[i] = (int16_t)sample;
+            int16_t gainSample = (int16_t)sample;
+            // Interleave: [L, R, L, R, ...]
+            stereoBuffer[i * 2] = gainSample;      // Left channel
+            stereoBuffer[i * 2 + 1] = gainSample;  // Right channel (duplicate)
           }
           
-          // Write gain-adjusted samples
-          size_t bytesToWrite = samplesToProcess * sizeof(int16_t);
-          size_t bytesWritten = audio.writePlaybackData((uint8_t*)gainBuffer, bytesToWrite);
-          playbackIndex += bytesWritten / sizeof(int16_t);
+          // Write stereo samples (2x the mono sample count)
+          size_t bytesToWrite = samplesToProcess * 2 * sizeof(int16_t);
+          size_t bytesWritten = audio.writePlaybackData((uint8_t*)stereoBuffer, bytesToWrite);
+          playbackIndex += bytesWritten / (2 * sizeof(int16_t));  // Divide by 2 because stereo doubles the samples
           
           // Progress indicator
           static unsigned long lastProgress = 0;
