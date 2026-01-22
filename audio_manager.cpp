@@ -241,6 +241,14 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
   // Extract only LEFT channel samples (even indices: 0, 2, 4, ...)
   // Properly sign-extend 24-bit sample before converting to 16-bit PCM
   
+  // DC Offset Removal Filter
+  // Uses a running average (IIR high-pass) to track and remove DC bias
+  // Algorithm: dc_estimate slowly tracks DC component, then subtract it from signal
+  // Filter coefficient N=7: time constant ≈ 128 samples (8ms at 16kHz)
+  // Integer-only math for embedded real-time processing
+  static int32_t dc_estimate = 0;  // Running estimate of DC offset
+  const int N = 7;  // Filter coefficient: 1/128 per sample (slow DC tracking)
+  
   size_t monoSampleCount = 0;
   for (size_t i = 0; i < samplesRead; i += 2) {  // Step by 2 to get LEFT channel only (even indices)
     if (i >= samplesRead) break;  // Safety check
@@ -255,7 +263,20 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
     // Convert to 16-bit PCM: shift right by 8 more bits (truncate lower 8 bits of 24-bit sample)
     int16_t pcm = (int16_t)(sample24bit >> 8);
     
-    outputBuffer[monoSampleCount++] = pcm;
+    // DC Offset Removal: IIR high-pass filter
+    // Update DC estimate using slow low-pass filter: dc_estimate = dc_estimate * (1 - 1/2^N) + pcm
+    // This tracks the slowly-varying DC component (bias around -3500)
+    dc_estimate = dc_estimate - (dc_estimate >> N) + (int32_t)pcm;
+    
+    // Remove DC offset: subtract the filtered DC estimate from the signal
+    // This centers the audio around zero while preserving audio content
+    int32_t pcm_dc_removed = (int32_t)pcm - (dc_estimate >> N);
+    
+    // Clamp to 16-bit range to prevent overflow
+    if (pcm_dc_removed > 32767) pcm_dc_removed = 32767;
+    if (pcm_dc_removed < -32768) pcm_dc_removed = -32768;
+    
+    outputBuffer[monoSampleCount++] = (int16_t)pcm_dc_removed;
   }
   
   // Track intermittent zero-data periods for automatic recovery
