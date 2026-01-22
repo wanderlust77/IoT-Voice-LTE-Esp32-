@@ -56,8 +56,8 @@ size_t recordedSamples = 0;
 // ============================================
 // Software gain multiplier (1.0 = normal, 2.0 = 2x louder, etc.)
 // MAX98357A with floating GAIN pin = 15dB hardware gain
-// Increased to 4.0x for much louder playback with soft limiting
-#define AUDIO_GAIN_MULTIPLIER  4.0f  // 4.0x gain for louder playback
+// Reduced to 1.5x for moderate volume level
+#define AUDIO_GAIN_MULTIPLIER  1.5f  // 1.5x gain for moderate volume
 
 // ============================================
 // NFC DATA
