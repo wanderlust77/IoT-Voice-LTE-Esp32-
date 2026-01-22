@@ -7,7 +7,8 @@
 #include "audio_manager.h"
 #include "logger.h"
 #include "config.h"
-#include "soc/soc.h"  // For REG_SET_BIT and BIT macros
+#include "soc/i2s_reg.h"   // For I2S register definitions
+#include "soc/i2s_struct.h" // For I2S register structure
 
 // I2S port numbers - use separate ports for mic and amp
 #define I2S_PORT_RECORDING I2S_NUM_0  // Microphone (RX)
@@ -111,10 +112,10 @@ bool AudioManager::startRecording(uint32_t sampleRate) {
   i2s_zero_dma_buffer(I2S_PORT_RECORDING);
   
   // ESP32 I2S RX mode: Sometimes LRCLK doesn't start until we start reading
-  // Trigger a dummy read to start the clocks properly
+  // Trigger a blocking read to start the clocks properly and ensure DMA is ready
   uint8_t dummyBuffer[64];
   size_t bytesRead = 0;
-  i2s_read(I2S_PORT_RECORDING, dummyBuffer, sizeof(dummyBuffer), &bytesRead, 0);  // Non-blocking
+  i2s_read(I2S_PORT_RECORDING, dummyBuffer, sizeof(dummyBuffer), &bytesRead, portMAX_DELAY);  // Blocking read for startup
   
   // Wait for microphone to stabilize and clocks to start
   delay(500);
@@ -123,7 +124,7 @@ bool AudioManager::startRecording(uint32_t sampleRate) {
   Logger::printf(LOG_INFO, "Audio", "I2S configured: %lu Hz, 32-bit, RX mode (I2S_NUM_0)", sampleRate);
   Logger::printf(LOG_INFO, "Audio", "Pins: BCLK=GPIO%d, LRCLK=GPIO%d, DATA=GPIO%d", 
                  pinMicBclk, pinMicLrclk, pinMicData);
-  Logger::printf(LOG_INFO, "Audio", "Format: STAND_I2S, Channel: LEFT only");
+  Logger::printf(LOG_INFO, "Audio", "Format: STAND_I2S, Channel: Stereo (LEFT extracted in software)");
   LOG_I("Audio", "NOTE: Triggered dummy read to start LRCLK");
   return true;
 }
@@ -235,12 +236,15 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
   
   // SPH0645LM4H: 24-bit signed audio left-justified in 32-bit word
   // Data is in bits [31:8], bits [7:0] are padding
-  // Driver configured for LEFT channel only, so all samples are mono
+  // I2S configured for stereo (RIGHT_LEFT) - mono mode causes all-zero samples on ESP32
+  // Extract only LEFT channel samples (even indices: 0, 2, 4, ...)
   // Properly sign-extend 24-bit sample before converting to 16-bit PCM
   
   size_t monoSampleCount = 0;
-  for (size_t i = 0; i < samplesRead; i++) {
-    uint32_t raw = i2sBuffer[i];
+  for (size_t i = 0; i < samplesRead; i += 2) {  // Step by 2 to get LEFT channel only (even indices)
+    if (i >= samplesRead) break;  // Safety check
+    
+    uint32_t raw = i2sBuffer[i];  // LEFT channel (even index)
     
     // Extract 24-bit signed PCM from bits [31:8]
     // Cast to int32_t first, then shift: this preserves sign bit (bit 31)
@@ -345,7 +349,7 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
     }
   }
   
-  // Return size reflects mono output (driver delivers mono directly)
+  // Return size reflects mono output (extracted from stereo LEFT channel only)
   return monoSampleCount * sizeof(int16_t);
 }
 
@@ -414,12 +418,12 @@ i2s_pin_config_t AudioManager::getPlaybackPins() {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
     .sample_rate = sampleRate,
     .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,  // SPH0645 outputs 32-bit words
-    .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,  // Configure driver for mono (LEFT channel only)
-    .communication_format = I2S_COMM_FORMAT_I2S_MSB,
+    .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,  // Stereo format required (mono causes all-zero samples on ESP32)
+    .communication_format = I2S_COMM_FORMAT_STAND_I2S,  // SPH0645 uses STANDARD I2S (1-bit delay after LRCLK)
     .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
     .dma_buf_count = DMA_BUFFER_COUNT,
     .dma_buf_len = DMA_BUFFER_SIZE,
-    .use_apll = false,
+    .use_apll = true,  // Enable APLL to stabilize BCLK/LRCLK for RX
     .tx_desc_auto_clear = false,
     .fixed_mclk = 0
   };
@@ -496,16 +500,15 @@ bool AudioManager::reconfigureI2S(AudioMode newMode, uint32_t sampleRate) {
     
     // Fix ESP32 I2S RX timing for SPH0645 microphone
     // Enable RX MSB shift to align ESP32 sampling with SPH0645 I2S timing
-    // I2S_NUM_0 base: 0x3FF4F000, RX_CONF1 offset: 0x0014, RX_MSB_SHIFT: bit 0
-    // Direct register access: set bit 0 of RX_CONF1 register
-    REG_SET_BIT(0x3FF4F000 + 0x0014, BIT(0));  // I2S0_RX_CONF1_REG, RX_MSB_SHIFT
+    // Use official ESP-IDF macro to set RX_MSB_SHIFT bit in RX_CONF1 register
+    SET_PERI_REG_MASK(I2S_RX_CONF1_REG(I2S_NUM_0), I2S_RX_MSB_SHIFT);
     Logger::printf(LOG_INFO, "Audio", "Enabled RX MSB shift for SPH0645 timing alignment");
     
     // ESP32 I2S RX mode: LRCLK may not toggle until DMA is actively reading
-    // Trigger a read to start the DMA and generate LRCLK
+    // Trigger a blocking read to start the DMA and generate LRCLK
     uint8_t dummyBuffer[128];
     size_t bytesRead = 0;
-    i2s_read(i2sPort, dummyBuffer, sizeof(dummyBuffer), &bytesRead, 100);  // 100ms timeout
+    i2s_read(i2sPort, dummyBuffer, sizeof(dummyBuffer), &bytesRead, portMAX_DELAY);  // Blocking read for startup
     Logger::printf(LOG_INFO, "Audio", "Triggered initial read (%d bytes) to start LRCLK", bytesRead);
   } else {
     Logger::printf(LOG_INFO, "Audio", "I2S TX mode ready (I2S_NUM_1)");
