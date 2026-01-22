@@ -42,10 +42,10 @@ ErrorCode lastError = ERROR_NONE;
 // AUDIO BUFFER (LOCAL STORAGE)
 // ============================================
 // Note: If allocation fails, reduce this value:
-//   * 15 seconds = 480KB (recommended)
-//   * 10 seconds = 320KB (if 15s fails)
-//   * 5 seconds  = 160KB (minimal)
-#define MAX_AUDIO_SAMPLES  (SAMPLE_RATE * 15)  // 15 seconds max at 16kHz (480KB)
+//   * 15 seconds = 661KB at 22kHz (recommended)
+//   * 10 seconds = 441KB at 22kHz (if 15s fails)
+//   * 5 seconds  = 220KB at 22kHz (minimal)
+#define MAX_AUDIO_SAMPLES  (SAMPLE_RATE * 15)  // 15 seconds max at 22.05kHz (661KB)
 int16_t* audioBuffer = nullptr;
 size_t audioBufferSize = 0;
 size_t recordedSamples = 0;
@@ -55,8 +55,8 @@ size_t recordedSamples = 0;
 // ============================================
 // Software gain multiplier (1.0 = normal, 2.0 = 2x louder, etc.)
 // MAX98357A with floating GAIN pin = 15dB hardware gain
-// Increased to 2.5x for louder playback
-#define AUDIO_GAIN_MULTIPLIER  2.5f  // 2.5x gain for louder playback
+// Increased to 4.0x for much louder playback with soft limiting
+#define AUDIO_GAIN_MULTIPLIER  4.0f  // 4.0x gain for louder playback
 
 // ============================================
 // NFC DATA
@@ -376,11 +376,33 @@ void loop() {
           static int16_t stereoBuffer[256];  // Stereo buffer: [L, R, L, R, ...]
           
           // Convert mono to stereo: duplicate each sample to both left and right channels
+          // Apply gain with soft limiting for better audio quality (prevents harsh clipping)
           for (size_t i = 0; i < samplesToProcess; i++) {
             int32_t sample = (int32_t)audioBuffer[playbackIndex + i];
             sample = (int32_t)(sample * AUDIO_GAIN_MULTIPLIER);
             
-            // Clamp to 16-bit range to prevent clipping
+            // Soft limiter: smooth compression instead of hard clipping
+            // Uses tanh-like curve for natural-sounding limiting
+            // Threshold: 90% of max (29491) for headroom
+            const int32_t threshold = 29491;  // ~90% of 32767
+            const int32_t maxVal = 32767;
+            
+            if (sample > threshold || sample < -threshold) {
+              // Apply soft compression above threshold
+              int32_t absSample = (sample < 0) ? -sample : sample;
+              int32_t excess = absSample - threshold;
+              // Compression ratio: 4:1 (reduces excess by 75%)
+              int32_t compressedExcess = excess / 4;
+              int32_t newAbs = threshold + compressedExcess;
+              
+              // Ensure we don't exceed max
+              if (newAbs > maxVal) newAbs = maxVal;
+              
+              // Restore sign
+              sample = (sample < 0) ? -newAbs : newAbs;
+            }
+            
+            // Final safety clamp (should rarely trigger with soft limiter)
             if (sample > 32767) sample = 32767;
             if (sample < -32768) sample = -32768;
             

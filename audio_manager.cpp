@@ -244,7 +244,7 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
   // DC Offset Removal Filter
   // Uses a running average (IIR high-pass) to track and remove DC bias
   // Algorithm: dc_estimate slowly tracks DC component, then subtract it from signal
-  // Filter coefficient N=7: time constant ≈ 128 samples (8ms at 16kHz)
+  // Filter coefficient N=7: time constant ≈ 128 samples (5.8ms at 22.05kHz)
   // Integer-only math for embedded real-time processing
   static int32_t dc_estimate = 0;  // Running estimate of DC offset
   const int N = 7;  // Filter coefficient: 1/128 per sample (slow DC tracking)
@@ -272,11 +272,24 @@ size_t AudioManager::readRecordedData(uint8_t* buffer, size_t maxLength) {
     // This centers the audio around zero while preserving audio content
     int32_t pcm_dc_removed = (int32_t)pcm - (dc_estimate >> N);
     
-    // Clamp to 16-bit range to prevent overflow
-    if (pcm_dc_removed > 32767) pcm_dc_removed = 32767;
-    if (pcm_dc_removed < -32768) pcm_dc_removed = -32768;
+    // High-Pass Filter: Remove low-frequency noise and rumble (< 80Hz)
+    // First-order IIR high-pass filter: y[n] = a*y[n-1] + a*(x[n] - x[n-1])
+    // Cutoff ~80Hz at 22kHz: a ≈ 0.997 (calculated: a = exp(-2*π*fc/fs))
+    // Integer implementation: a = 1023/1024 (close approximation)
+    static int32_t hp_last_input = 0;
+    static int32_t hp_last_output = 0;
+    const int32_t hp_alpha = 1023;  // a * 1024 for integer math
+    int32_t hp_input = pcm_dc_removed;
+    int32_t hp_output = (hp_alpha * hp_last_output) / 1024 + (hp_alpha * (hp_input - hp_last_input)) / 1024;
+    hp_last_input = hp_input;
+    hp_last_output = hp_output;
+    int32_t pcm_filtered = hp_output;
     
-    outputBuffer[monoSampleCount++] = (int16_t)pcm_dc_removed;
+    // Clamp to 16-bit range to prevent overflow
+    if (pcm_filtered > 32767) pcm_filtered = 32767;
+    if (pcm_filtered < -32768) pcm_filtered = -32768;
+    
+    outputBuffer[monoSampleCount++] = (int16_t)pcm_filtered;
   }
   
   // Track intermittent zero-data periods for automatic recovery
