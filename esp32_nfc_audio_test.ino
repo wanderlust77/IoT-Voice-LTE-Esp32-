@@ -5,7 +5,7 @@
  * 
  * Features:
  * - Read NFC tag (NTAG213/215) UID
- * - Record audio on button short press (7 seconds)
+ * - Record audio on button short press (5 seconds)
  * - Playback recorded audio on button long press
  * - All local (no network/LTE)
  * 
@@ -24,6 +24,7 @@
 #include "button_handler.h"
 #include "nfc_manager.h"
 #include "audio_manager.h"
+#include "esp_heap_caps.h"  // For heap_caps_malloc to handle fragmentation
 
 // ============================================
 // GLOBAL OBJECTS
@@ -42,10 +43,10 @@ ErrorCode lastError = ERROR_NONE;
 // AUDIO BUFFER (LOCAL STORAGE)
 // ============================================
 // Note: If allocation fails, reduce this value:
-//   * 7 seconds = 309KB at 22kHz (fits in ~346KB free heap)
+//   * 5 seconds = 220KB at 22kHz (recommended - fits even with fragmentation)
+//   * 4 seconds = 176KB at 22kHz (fallback if 5s fails)
 //   * 10 seconds = 320KB at 16kHz (alternative: longer but lower quality)
-//   * 5 seconds  = 220KB at 22kHz (minimal)
-#define MAX_AUDIO_SAMPLES  (SAMPLE_RATE * 7)  // 7 seconds max at 22.05kHz (309KB)
+#define MAX_AUDIO_SAMPLES  (SAMPLE_RATE * 5)  // 5 seconds max at 22.05kHz (220KB)
 int16_t* audioBuffer = nullptr;
 size_t audioBufferSize = 0;
 size_t recordedSamples = 0;
@@ -101,27 +102,50 @@ void setup() {
   LOG_I("Main", "Milestone: Local bring-up (no LTE)");
   LOG_I("Main", "========================================");
   
-  // Allocate audio buffer
+  // Allocate audio buffer - use heap_caps_malloc to handle fragmentation better
   LOG_I("Main", "Allocating audio buffer...");
   size_t bufferBytes = MAX_AUDIO_SAMPLES * sizeof(int16_t);
   size_t freeHeap = ESP.getFreeHeap();
+  size_t largestFreeBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
   Logger::printf(LOG_INFO, "Main", "Free heap: %d bytes", freeHeap);
+  Logger::printf(LOG_INFO, "Main", "Largest free block: %d bytes", largestFreeBlock);
   Logger::printf(LOG_INFO, "Main", "Requesting: %d bytes (%d samples)", 
                  bufferBytes, MAX_AUDIO_SAMPLES);
   
-  if (freeHeap < bufferBytes + 10000) {  // Leave 10KB safety margin
-    Logger::printf(LOG_ERROR, "Main", "Insufficient heap! Need %d bytes, have %d bytes", bufferBytes, freeHeap);
+  if (largestFreeBlock < bufferBytes) {
+    Logger::printf(LOG_ERROR, "Main", "Insufficient contiguous heap! Need %d bytes, largest block: %d bytes", 
+                   bufferBytes, largestFreeBlock);
+    // Try smaller buffer as fallback
+    size_t fallbackSamples = SAMPLE_RATE * 4;  // 4 seconds
+    size_t fallbackBytes = fallbackSamples * sizeof(int16_t);
+    Logger::printf(LOG_WARN, "Main", "Trying fallback: %d bytes (%d samples, 4 seconds)", 
+                   fallbackBytes, fallbackSamples);
+    
+    if (largestFreeBlock >= fallbackBytes) {
+      bufferBytes = fallbackBytes;
+      audioBufferSize = fallbackSamples;
+    } else {
+      Logger::printf(LOG_ERROR, "Main", "Fallback also too large! Need %d bytes, have %d bytes", 
+                     fallbackBytes, largestFreeBlock);
+      currentState = STATE_ERROR;
+      return;
+    }
+  }
+  
+  // Use heap_caps_malloc for better allocation (handles fragmentation)
+  // MALLOC_CAP_8BIT: 8-bit accessible memory
+  // MALLOC_CAP_INTERNAL: Internal RAM (faster than SPIRAM)
+  audioBuffer = (int16_t*)heap_caps_malloc(bufferBytes, MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+  if (!audioBuffer) {
+    LOG_E("Main", "heap_caps_malloc() failed! Heap is too fragmented.");
+    Logger::printf(LOG_ERROR, "Main", "Free heap: %d bytes, Largest block: %d bytes, Min free: %d bytes", 
+                   ESP.getFreeHeap(), largestFreeBlock, ESP.getMinFreeHeap());
     currentState = STATE_ERROR;
     return;
   }
   
-  audioBuffer = (int16_t*)malloc(bufferBytes);
-  if (!audioBuffer) {
-    LOG_E("Main", "malloc() failed! Heap may be fragmented.");
-    Logger::printf(LOG_ERROR, "Main", "Free heap: %d bytes, Min free: %d bytes", 
-                   ESP.getFreeHeap(), ESP.getMinFreeHeap());
-    currentState = STATE_ERROR;
-    return;
+  if (audioBufferSize == 0) {
+    audioBufferSize = MAX_AUDIO_SAMPLES;
   }
   
   audioBufferSize = MAX_AUDIO_SAMPLES;
@@ -176,7 +200,7 @@ void setup() {
   LOG_I("Main", "");
   LOG_I("Main", "Usage:");
   LOG_I("Main", "1. Present NFC tag to reader");
-  LOG_I("Main", "2. SHORT press button → Record 7 seconds");
+  LOG_I("Main", "2. SHORT press button → Record 5 seconds");
   LOG_I("Main", "3. LONG press button → Playback recording");
   LOG_I("Main", "========================================");
   
@@ -227,7 +251,7 @@ void loop() {
       if (button.wasShortPress()) {
         // Start recording
         LOG_I("Main", "========================================");
-        LOG_I("Main", "Recording audio (7 seconds)...");
+        LOG_I("Main", "Recording audio (5 seconds)...");
         LOG_I("Main", "Speak into microphone!");
         LOG_I("Main", "========================================");
         
@@ -308,13 +332,13 @@ void loop() {
         static unsigned long lastProgress = 0;
         if (millis() - lastProgress > 500) {
           lastProgress = millis();
-          Logger::printf(LOG_INFO, "Main", "Recording... %.1fs / 7.0s (samples: %d)", 
+          Logger::printf(LOG_INFO, "Main", "Recording... %.1fs / 5.0s (samples: %d)", 
                         elapsed / 1000.0f, recordedSamples);
         }
       }
       
-      // Check if 7 seconds have elapsed
-      if (millis() - recordingStartTime >= 7000) {
+      // Check if 5 seconds have elapsed
+      if (millis() - recordingStartTime >= 5000) {
         // Recording complete
         audio.stopRecording();
         LOG_I("Main", "========================================");
