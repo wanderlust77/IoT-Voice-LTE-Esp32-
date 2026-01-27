@@ -176,27 +176,75 @@ bool LTEManager::checkNetwork(uint32_t timeout_ms) {
     return false;
   }
   
+  // Enable network registration unsolicited result codes
+  // This allows modem to automatically report registration status changes
+  if (!sendATCommand("AT+CREG=2", "OK", 5000)) {
+    LOG_W("LTE", "Failed to enable CREG unsolicited codes (continuing anyway)");
+  } else {
+    LOG_I("LTE", "Enabled network registration notifications");
+  }
+  
   // Wait for network registration
   unsigned long startTime = millis();
+  int checkCount = 0;
+  
   while (millis() - startTime < timeout_ms) {
+    checkCount++;
+    unsigned long elapsed = millis() - startTime;
+    
     String response;
+    clearSerialBuffer();  // Clear any pending data before query
+    
     if (sendATCommandGetResponse("AT+CREG?", response, 5000)) {
-      // Look for +CREG: 0,1 (registered) or +CREG: 0,5 (roaming)
-      if (response.indexOf("+CREG: 0,1") >= 0 || response.indexOf("+CREG: 0,5") >= 0) {
-        LOG_I("LTE", "Network registered");
+      // Log the full response for debugging
+      Logger::printf(LOG_INFO, "LTE", "CREG check #%d (elapsed: %lu ms): %s", 
+                     checkCount, elapsed, response.c_str());
+      
+      // Parse CREG status
+      // +CREG: <n>,<stat>
+      // n: 0=disable network registration unsolicited result code, 1=enable, 2=enable with location info
+      // stat: 0=not registered, 1=registered (home), 2=searching, 3=denied, 4=unknown, 5=registered (roaming)
+      
+      if (response.indexOf("+CREG: 0,1") >= 0 || response.indexOf("+CREG: 1,1") >= 0 || 
+          response.indexOf("+CREG: 2,1") >= 0) {
+        LOG_I("LTE", "Network registered (home network)");
         return true;
       }
       
-      if (response.indexOf("+CREG: 0,3") >= 0) {
-        LOG_E("LTE", "Network registration denied");
-        return false;
+      if (response.indexOf("+CREG: 0,5") >= 0 || response.indexOf("+CREG: 1,5") >= 0 || 
+          response.indexOf("+CREG: 2,5") >= 0) {
+        LOG_I("LTE", "Network registered (roaming)");
+        return true;
       }
+      
+      if (response.indexOf("+CREG:") >= 0) {
+        // Extract status code
+        int cregPos = response.indexOf("+CREG:");
+        int commaPos = response.indexOf(',', cregPos);
+        if (commaPos > 0) {
+          int stat = response.substring(commaPos + 1).toInt();
+          
+          if (stat == 0) {
+            Logger::printf(LOG_INFO, "LTE", "Status: Not registered (waiting...)");
+          } else if (stat == 2) {
+            Logger::printf(LOG_INFO, "LTE", "Status: Searching for network...");
+          } else if (stat == 3) {
+            LOG_E("LTE", "Network registration denied");
+            return false;
+          } else if (stat == 4) {
+            Logger::printf(LOG_WARN, "LTE", "Status: Unknown (waiting...)");
+          }
+        }
+      }
+    } else {
+      Logger::printf(LOG_WARN, "LTE", "CREG check #%d failed (no response or timeout)", checkCount);
     }
     
     delay(2000);  // Check every 2 seconds
   }
   
-  LOG_E("LTE", "Network registration timeout");
+  Logger::printf(LOG_ERROR, "LTE", "Network registration timeout after %lu ms (%d checks)", 
+                 timeout_ms, checkCount);
   return false;
 }
 
@@ -378,9 +426,12 @@ bool LTEManager::httpPost(const char* url, const uint8_t* data, size_t length) {
 // ============================================
 void LTEManager::update() {
   // Process any unsolicited messages from modem
-  while (modemSerial->available()) {
-    char c = modemSerial->read();
-    // Could log unsolicited responses here if needed
+  // Note: This should be called in loop() but won't interfere with active AT commands
+  // because clearSerialBuffer() is called before each command
+  if (modemSerial->available()) {
+    // Only read if we're not in the middle of a command
+    // For now, we'll let the command handlers deal with serial data
+    // This prevents interference with active operations
   }
 }
 
