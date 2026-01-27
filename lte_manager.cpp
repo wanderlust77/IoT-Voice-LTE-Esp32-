@@ -184,18 +184,60 @@ bool LTEManager::checkNetwork(uint32_t timeout_ms) {
     LOG_I("LTE", "Enabled network registration notifications");
   }
   
+  // Check signal strength first (CSQ)
+  String csqResponse;
+  if (sendATCommandGetResponse("AT+CSQ", csqResponse, 5000)) {
+    Logger::printf(LOG_INFO, "LTE", "Signal strength: %s", csqResponse.c_str());
+    // Parse CSQ: +CSQ: <rssi>,<ber>
+    // rssi: 0-31 (higher is better), 99=unknown
+    int csqPos = csqResponse.indexOf("+CSQ:");
+    if (csqPos >= 0) {
+      int commaPos = csqResponse.indexOf(',', csqPos);
+      if (commaPos > 0) {
+        int rssi = csqResponse.substring(csqPos + 6, commaPos).toInt();
+        if (rssi == 99) {
+          LOG_W("LTE", "Signal strength: Unknown (no signal?)");
+        } else {
+          Logger::printf(LOG_INFO, "LTE", "Signal strength: %d/31 (higher is better)", rssi);
+          if (rssi < 10) {
+            LOG_W("LTE", "Weak signal - may affect registration");
+          }
+        }
+      }
+    }
+  }
+  
   // Wait for network registration
   unsigned long startTime = millis();
   int checkCount = 0;
+  int consecutiveFailures = 0;
   
   while (millis() - startTime < timeout_ms) {
     checkCount++;
     unsigned long elapsed = millis() - startTime;
     
+    // If we've had multiple consecutive failures, try a simple AT command first
+    // to verify modem is still responsive
+    if (consecutiveFailures >= 3) {
+      Logger::printf(LOG_WARN, "LTE", "Multiple failures detected, checking modem responsiveness...");
+      clearSerialBuffer();
+      if (sendATCommand("AT", "OK", 3000)) {
+        LOG_I("LTE", "Modem is responsive, continuing registration check");
+        consecutiveFailures = 0;
+      } else {
+        LOG_W("LTE", "Modem not responding - may be busy searching");
+        delay(5000);  // Wait longer before retry
+        consecutiveFailures++;
+        continue;
+      }
+    }
+    
     String response;
     clearSerialBuffer();  // Clear any pending data before query
     
     if (sendATCommandGetResponse("AT+CREG?", response, 5000)) {
+      consecutiveFailures = 0;  // Reset failure counter on success
+      
       // Log the full response for debugging
       Logger::printf(LOG_INFO, "LTE", "CREG check #%d (elapsed: %lu ms): %s", 
                      checkCount, elapsed, response.c_str());
@@ -237,10 +279,17 @@ bool LTEManager::checkNetwork(uint32_t timeout_ms) {
         }
       }
     } else {
-      Logger::printf(LOG_WARN, "LTE", "CREG check #%d failed (no response or timeout)", checkCount);
+      consecutiveFailures++;
+      Logger::printf(LOG_WARN, "LTE", "CREG check #%d failed (no response or timeout) - failures: %d", 
+                     checkCount, consecutiveFailures);
+      
+      // If modem is not responding, wait longer before next attempt
+      if (consecutiveFailures >= 3) {
+        delay(3000);  // Wait 3 seconds before retry
+      }
     }
     
-    delay(2000);  // Check every 2 seconds
+    delay(2000);  // Check every 2 seconds (or longer if failures occurred)
   }
   
   Logger::printf(LOG_ERROR, "LTE", "Network registration timeout after %lu ms (%d checks)", 
