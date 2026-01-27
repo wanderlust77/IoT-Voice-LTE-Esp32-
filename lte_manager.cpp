@@ -551,3 +551,121 @@ bool LTEManager::httpPostData(const uint8_t* data, size_t length) {
 bool LTEManager::httpTerminate() {
   return sendATCommand("AT+HTTPTERM", "OK", 5000);
 }
+
+// ============================================
+// HTTP POST JSON WITH BEARER TOKEN AUTH
+// ============================================
+bool LTEManager::httpPostJsonWithAuth(const char* url, const char* jsonBody, const char* bearerToken, String& response) {
+  LOG_I("LTE", "HTTP POST JSON with Bearer auth...");
+  Logger::printf(LOG_INFO, "LTE", "URL: %s", url);
+  Logger::printf(LOG_INFO, "LTE", "Body: %s", jsonBody);
+  
+  response = "";
+  
+  // Initialize HTTP
+  if (!httpInit()) {
+    LOG_E("LTE", "HTTP init failed");
+    return false;
+  }
+  
+  // Enable SSL/TLS for HTTPS
+  if (!sendATCommand("AT+HTTPSSL=1", "OK", 5000)) {
+    LOG_W("LTE", "Failed to enable SSL (may not be supported)");
+    // Continue anyway - some modems handle HTTPS automatically
+  }
+  
+  // Set URL
+  if (!httpSetParameter("URL", url)) {
+    LOG_E("LTE", "Failed to set URL");
+    httpTerminate();
+    return false;
+  }
+  
+  // Set CID
+  if (!httpSetParameter("CID", "1")) {
+    LOG_E("LTE", "Failed to set CID");
+    httpTerminate();
+    return false;
+  }
+  
+  // Set Authorization header using USERDATA parameter
+  char authHeader[256];
+  snprintf(authHeader, sizeof(authHeader), "Authorization: Bearer %s", bearerToken);
+  if (!httpSetParameter("USERDATA", authHeader)) {
+    LOG_E("LTE", "Failed to set Authorization header");
+    httpTerminate();
+    return false;
+  }
+  
+  // Set content type to JSON
+  if (!httpSetParameter("CONTENT", "application/json")) {
+    LOG_E("LTE", "Failed to set content type");
+    httpTerminate();
+    return false;
+  }
+  
+  // Upload JSON body
+  size_t jsonLen = strlen(jsonBody);
+  char cmd[64];
+  snprintf(cmd, sizeof(cmd), "AT+HTTPDATA=%d,10000", jsonLen);
+  
+  modemSerial->println(cmd);
+  Logger::printf(LOG_DEBUG, "LTE", "TX: %s", cmd);
+  
+  // Wait for DOWNLOAD prompt
+  if (!waitForResponse("DOWNLOAD", 5000)) {
+    LOG_E("LTE", "DOWNLOAD prompt not received");
+    httpTerminate();
+    return false;
+  }
+  
+  // Send JSON data
+  modemSerial->print(jsonBody);
+  Logger::printf(LOG_DEBUG, "LTE", "Sent JSON: %s", jsonBody);
+  
+  // Wait for OK
+  if (!waitForResponse("OK", 15000)) {
+    LOG_E("LTE", "Failed to upload JSON data");
+    httpTerminate();
+    return false;
+  }
+  
+  // Execute POST
+  int statusCode, dataLength;
+  if (!httpAction(HTTP_POST, &statusCode, &dataLength)) {
+    LOG_E("LTE", "HTTP POST action failed");
+    httpTerminate();
+    return false;
+  }
+  
+  Logger::printf(LOG_INFO, "LTE", "HTTP POST status: %d, response length: %d", statusCode, dataLength);
+  
+  // Read response
+  if (dataLength > 0) {
+    uint8_t* buffer = (uint8_t*)malloc(dataLength + 1);
+    if (buffer) {
+      size_t readLength = dataLength;
+      if (httpRead(buffer, &readLength, dataLength)) {
+        buffer[readLength] = '\0';
+        response = String((char*)buffer);
+        Logger::printf(LOG_INFO, "LTE", "Response: %s", response.c_str());
+      } else {
+        LOG_E("LTE", "Failed to read HTTP response");
+      }
+      free(buffer);
+    } else {
+      LOG_E("LTE", "Failed to allocate response buffer");
+    }
+  }
+  
+  // Terminate HTTP
+  httpTerminate();
+  
+  if (statusCode >= 200 && statusCode < 300) {
+    LOG_I("LTE", "HTTP POST JSON successful");
+    return true;
+  }
+  
+  Logger::printf(LOG_ERROR, "LTE", "HTTP POST failed with status %d", statusCode);
+  return false;
+}

@@ -52,6 +52,10 @@ public:
   // Returns true if successful
   bool httpPost(const char* url, const uint8_t* data, size_t length);
   
+  // HTTP POST JSON with Bearer token authentication
+  // Returns true if successful, fills responseBuffer with response
+  bool httpPostJsonWithAuth(const char* url, const char* jsonBody, const char* bearerToken, String& response);
+  
   // Update function (call in loop to process incoming data)
   void update();
 
