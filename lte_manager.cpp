@@ -53,9 +53,21 @@ bool LTEManager::powerOn() {
   LOG_I("LTE", "Checking if modem is already on...");
   
   // First, check if modem is already powered on
+  // Clear any pending unsolicited messages
   clearSerialBuffer();
+  delay(500);
+  
+  // Try AT command with longer timeout to handle unsolicited messages
   for (int i = 0; i < 3; i++) {
-    if (sendATCommand("AT", "OK", 1000)) {
+    clearSerialBuffer();
+    modemSerial->println("AT");
+    Logger::printf(LOG_DEBUG, "LTE", "TX: AT");
+    
+    // Wait longer (3 seconds) to allow unsolicited messages + OK
+    String response = readSerial(3000);
+    Logger::printf(LOG_DEBUG, "LTE", "RX: %s", response.c_str());
+    
+    if (response.indexOf("OK") >= 0) {
       powered = true;
       LOG_I("LTE", "Modem already powered on");
       return true;
@@ -74,13 +86,21 @@ bool LTEManager::powerOn() {
   // Wait for modem to boot (LTE modems can take 10-15 seconds)
   LOG_I("LTE", "Waiting for modem boot (up to 15s)...");
   
-  // Try AT command every 2 seconds for up to 15 seconds
-  for (int attempt = 0; attempt < 8; attempt++) {
+  // Try AT command every 2 seconds for up to 30 seconds
+  // LTE modems can take longer to boot, especially after power-on
+  for (int attempt = 0; attempt < 15; attempt++) {
     delay(2000);
-    Logger::printf(LOG_INFO, "LTE", "Boot check %d/8...", attempt + 1);
+    Logger::printf(LOG_INFO, "LTE", "Boot check %d/15...", attempt + 1);
     
     clearSerialBuffer();
-    if (sendATCommand("AT", "OK", 2000)) {
+    modemSerial->println("AT");
+    Logger::printf(LOG_DEBUG, "LTE", "TX: AT");
+    
+    // Wait 3 seconds to allow unsolicited messages + OK
+    String response = readSerial(3000);
+    Logger::printf(LOG_DEBUG, "LTE", "RX: %s", response.c_str());
+    
+    if (response.indexOf("OK") >= 0) {
       powered = true;
       Logger::printf(LOG_INFO, "LTE", "Modem responded after %d seconds", (attempt + 1) * 2);
       return true;
@@ -416,6 +436,7 @@ void LTEManager::clearSerialBuffer() {
 String LTEManager::readSerial(uint32_t timeout_ms) {
   String result = "";
   unsigned long startTime = millis();
+  unsigned long lastByteTime = millis();
   int bytesReceived = 0;
   
   while (millis() - startTime < timeout_ms) {
@@ -423,8 +444,21 @@ String LTEManager::readSerial(uint32_t timeout_ms) {
       char c = modemSerial->read();
       result += c;
       bytesReceived++;
-      startTime = millis();  // Reset timeout on data received
+      lastByteTime = millis();  // Track when we last received data
     }
+    
+    // If we received data recently, wait a bit more for additional data
+    // This handles cases where unsolicited messages come before "OK"
+    if (bytesReceived > 0 && (millis() - lastByteTime) < 100) {
+      delay(10);
+      continue;
+    }
+    
+    // If no data for 200ms and we have some data, assume response is complete
+    if (bytesReceived > 0 && (millis() - lastByteTime) >= 200) {
+      break;
+    }
+    
     delay(10);
   }
   
