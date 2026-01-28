@@ -744,9 +744,43 @@ bool LTEManager::httpPostJsonWithAuth(const char* url, const char* jsonBody, con
 
   size_t jsonLen = strlen(jsonBody);
 
-  // Configure HTTP body and header lengths
+  // Derive base URL (scheme + host) for SHCONF=\"URL\"
+  // Example: https://host/path -> https://host
+  char baseUrl[256] = {0};
   {
-    char cmd[64];
+    const char* schemeEnd = strstr(url, "://");
+    if (schemeEnd) {
+      schemeEnd += 3; // skip ://
+      const char* pathStart = strchr(schemeEnd, '/');
+      if (pathStart) {
+        size_t len = pathStart - url;
+        if (len >= sizeof(baseUrl)) len = sizeof(baseUrl) - 1;
+        memcpy(baseUrl, url, len);
+        baseUrl[len] = '\0';
+      } else {
+        // No path, use full URL
+        strncpy(baseUrl, url, sizeof(baseUrl) - 1);
+      }
+    } else {
+      // Fallback: use full URL
+      strncpy(baseUrl, url, sizeof(baseUrl) - 1);
+    }
+  }
+
+  // Configure HTTP base URL, body and header lengths
+  {
+    char cmd[128];
+
+    // Base URL (host)
+    snprintf(cmd, sizeof(cmd), "AT+SHCONF=\"URL\",\"%s\"", baseUrl);
+    if (!sendATCommand(cmd, "OK", 5000)) {
+      Logger::printf(LOG_WARN, "LTE", "Failed to set base URL with SHCONF (URL=%s)", baseUrl);
+      // Not fatal, SHREQ will still use full URL
+    } else {
+      Logger::printf(LOG_INFO, "LTE", "HTTP base URL set to: %s", baseUrl);
+    }
+
+    // Body length
     snprintf(cmd, sizeof(cmd), "AT+SHCONF=\"BODYLEN\",%d", (int)jsonLen);
     if (!sendATCommand(cmd, "OK", 5000)) {
       LOG_E("LTE", "Failed to set BODYLEN (AT+SHCONF)");
