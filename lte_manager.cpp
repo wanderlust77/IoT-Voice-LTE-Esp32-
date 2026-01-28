@@ -184,23 +184,20 @@ bool LTEManager::checkNetwork(uint32_t timeout_ms) {
 // CONFIGURE BEARER APN
 // ============================================
 bool LTEManager::configureBearerAPN(const char* apn) {
-  LOG_I("LTE", "Configuring bearer APN...");
+  LOG_I("LTE", "Configuring APN...");
+  Logger::printf(LOG_INFO, "LTE", "APN: %s", apn);
   
-  // Set connection type to GPRS
-  if (!sendATCommand("AT+SAPBR=3,1,\"CONTYPE\",\"GPRS\"", "OK", 5000)) {
-    LOG_E("LTE", "Failed to set connection type");
-    return false;
-  }
-  
-  // Set APN
+  // SIM7070E uses AT+CGDCONT instead of SAPBR
+  // Format: AT+CGDCONT=<cid>,"<PDP_type>","<APN>"
   char cmd[128];
-  snprintf(cmd, sizeof(cmd), "AT+SAPBR=3,1,\"APN\",\"%s\"", apn);
+  snprintf(cmd, sizeof(cmd), "AT+CGDCONT=1,\"IP\",\"%s\"", apn);
+  
   if (!sendATCommand(cmd, "OK", 5000)) {
-    LOG_E("LTE", "Failed to set APN");
+    LOG_E("LTE", "Failed to configure APN!");
     return false;
   }
   
-  LOG_I("LTE", "Bearer APN configured");
+  LOG_I("LTE", "APN configured");
   return true;
 }
 
@@ -208,38 +205,58 @@ bool LTEManager::configureBearerAPN(const char* apn) {
 // OPEN BEARER CONNECTION
 // ============================================
 bool LTEManager::openBearer() {
-  LOG_I("LTE", "Opening bearer...");
+  LOG_I("LTE", "Activating PDP context...");
   
-  // Check if already open
-  String response;
-  if (sendATCommandGetResponse("AT+SAPBR=2,1", response, 5000)) {
-    if (response.indexOf("0.0.0.0") < 0) {
-      LOG_I("LTE", "Bearer already open");
+  // SIM7070E uses AT+CNACT instead of SAPBR
+  // Format: AT+CNACT=<pdpidx>,<action>
+  // pdpidx: 0-2 (use 0)
+  // action: 0=deactivate, 1=activate
+  
+  // First check if already active
+  String checkResp;
+  if (sendATCommandGetResponse("AT+CNACT?", checkResp, 5000)) {
+    Logger::printf(LOG_INFO, "LTE", "PDP check: %s", checkResp.c_str());
+    // Response: +CNACT: <pdpidx>,<status>,"<ip_addr>"
+    // status: 0=inactive, 1=active
+    if (checkResp.indexOf("+CNACT: 0,1") >= 0) {
+      LOG_I("LTE", "PDP context already active");
       return true;
     }
   }
   
-  // Open bearer
-  if (!sendATCommand("AT+SAPBR=1,1", "OK", 30000)) {
-    LOG_E("LTE", "Failed to open bearer");
+  // Activate PDP context
+  if (!sendATCommand("AT+CNACT=0,1", "OK", 30000)) {
+    LOG_E("LTE", "Failed to activate PDP context!");
     return false;
   }
   
-  // Verify bearer is open
-  if (sendATCommandGetResponse("AT+SAPBR=2,1", response, 5000)) {
-    Logger::printf(LOG_INFO, "LTE", "Bearer status: %s", response.c_str());
+  // Verify activation
+  delay(1000);
+  if (sendATCommandGetResponse("AT+CNACT?", checkResp, 5000)) {
+    Logger::printf(LOG_INFO, "LTE", "PDP status: %s", checkResp.c_str());
+    if (checkResp.indexOf("+CNACT: 0,1") >= 0) {
+      LOG_I("LTE", "PDP context activated");
+      return true;
+    }
   }
   
-  LOG_I("LTE", "Bearer opened");
-  return true;
+  LOG_E("LTE", "PDP context activation verification failed");
+  return false;
 }
 
 // ============================================
 // CLOSE BEARER CONNECTION
 // ============================================
 bool LTEManager::closeBearer() {
-  LOG_I("LTE", "Closing bearer...");
-  sendATCommand("AT+SAPBR=0,1", "OK", 10000);
+  LOG_I("LTE", "Deactivating PDP context...");
+  
+  // SIM7070E: AT+CNACT=0,0 to deactivate
+  if (!sendATCommand("AT+CNACT=0,0", "OK", 30000)) {
+    LOG_E("LTE", "Failed to deactivate PDP context");
+    return false;
+  }
+  
+  LOG_I("LTE", "PDP context deactivated");
   return true;
 }
 
