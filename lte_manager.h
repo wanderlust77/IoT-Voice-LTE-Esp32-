@@ -23,17 +23,20 @@ enum HttpMethod {
 // ============================================
 class LTEManager {
 public:
+  // Constructor
+  LTEManager(uint8_t rxPin, uint8_t txPin, uint8_t pwrPin, unsigned long baudRate);
+  
   // Initialize LTE manager and UART
-  bool init(uint8_t txPin, uint8_t rxPin, uint8_t pwrkeyPin, uint8_t resetPin, uint32_t baudRate);
+  bool begin();
   
   // Power on modem (pulse PWRKEY)
   bool powerOn();
   
   // Power off modem
-  bool powerOff();
+  void powerOff();
   
   // Check network registration
-  bool checkNetwork(uint32_t timeout_ms);
+  bool checkNetwork(unsigned long timeout);
   
   // Configure bearer profile with APN
   bool configureBearerAPN(const char* apn);
@@ -44,53 +47,31 @@ public:
   // Close bearer connection
   bool closeBearer();
   
-  // HTTP GET request
-  // Returns true if successful, fills buffer with response data
-  bool httpGet(const char* url, uint8_t* buffer, size_t* length, size_t maxLength);
-  
-  // HTTP POST request
-  // Returns true if successful
-  bool httpPost(const char* url, const uint8_t* data, size_t length);
-  
   // HTTP POST JSON with Bearer token authentication
-  // Returns true if successful, fills responseBuffer with response
+  // Returns true if successful, fills response with response data
   bool httpPostJsonWithAuth(const char* url, const char* jsonBody, const char* bearerToken, String& response);
-  
-  // Update function (call in loop to process incoming data)
-  void update();
 
 private:
   HardwareSerial* modemSerial;
-  uint8_t pinPwrkey;
-  uint8_t pinReset;
-  bool initialized;
-  bool powered;
-  
-  // Response buffer
-  String responseBuffer;
+  uint8_t rxPin;
+  uint8_t txPin;
+  uint8_t pwrPin;
+  unsigned long baudRate;
   
   // Send AT command and wait for expected response
-  bool sendATCommand(const char* cmd, const char* expected, uint32_t timeout_ms);
+  bool sendATCommand(const char* cmd, const char* expected, unsigned long timeout);
   
   // Send AT command and get response
-  bool sendATCommandGetResponse(const char* cmd, String& response, uint32_t timeout_ms);
+  bool sendATCommandGetResponse(const char* cmd, String& response, unsigned long timeout);
   
   // Wait for specific response
-  bool waitForResponse(const char* expected, uint32_t timeout_ms);
+  bool waitForResponse(const char* expected, unsigned long timeout);
   
   // Clear serial buffer
   void clearSerialBuffer();
   
   // Read available serial data
-  String readSerial(uint32_t timeout_ms);
-  
-  // HTTP helper functions
-  bool httpInit();
-  bool httpSetParameter(const char* param, const char* value);
-  bool httpAction(HttpMethod method, int* statusCode, int* dataLength);
-  bool httpRead(uint8_t* buffer, size_t* length, size_t maxLength);
-  bool httpPostData(const uint8_t* data, size_t length);
-  bool httpTerminate();
+  String readSerial(unsigned long timeout);
 };
 
 #endif // LTE_MANAGER_H
