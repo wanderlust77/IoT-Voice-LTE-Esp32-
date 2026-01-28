@@ -22,7 +22,7 @@
 // ============================================
 // GLOBAL OBJECTS
 // ============================================
-LTEManager lte;
+LTEManager lte(PIN_LTE_RX, PIN_LTE_TX, PIN_LTE_PWRKEY, LTE_BAUD_RATE);
 
 // ============================================
 // SETUP
@@ -39,7 +39,7 @@ void setup() {
   
   // Initialize LTE modem
   LOG_I("Main", "Initializing LTE modem...");
-  if (!lte.init(PIN_LTE_TX, PIN_LTE_RX, PIN_LTE_PWRKEY, PIN_LTE_RESET, LTE_BAUD_RATE)) {
+  if (!lte.begin()) {
     LOG_E("Main", "LTE init failed!");
     while(1) delay(1000);  // Halt on error
   }
@@ -193,9 +193,6 @@ void testVoiceUploadUrl() {
 // MAIN LOOP
 // ============================================
 void loop() {
-  // Update LTE manager (process incoming data)
-  lte.update();
-  
   // Nothing else to do - test runs once in setup()
   delay(1000);
 }
