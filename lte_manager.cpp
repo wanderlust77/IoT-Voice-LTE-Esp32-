@@ -796,29 +796,63 @@ bool LTEManager::httpPostJsonWithAuth(const char* url, const char* jsonBody, con
   }
 
   // Basic SSL configuration for HTTPS (use context 1)
-  // These values are standard examples from SIMCom HTTPS app notes.
-  // If any step fails, we log a warning but continue - some firmware
-  // may have reasonable defaults.
-  sendATCommand("AT+CSSLCFG=\"sslversion\",1,3", "OK", 5000);   // TLS 1.2
-  sendATCommand("AT+CSSLCFG=\"ciphersuite\",1,0XFFFF", "OK", 5000); // Default cipher set
-  sendATCommand("AT+CSSLCFG=\"seclevel\",1,0", "OK", 5000);    // No certificate validation
-  sendATCommand("AT+SHSSL=1,\"\"", "OK", 5000);                // Bind HTTP to SSL ctx 1
+  // Simplified approach: just disable cert verification
+  LOG_I("LTE", "Configuring SSL for HTTPS...");
+  if (sendATCommand("AT+CSSLCFG=\"sslversion\",1,3", "OK", 5000)) {
+    LOG_I("LTE", "SSL version set to TLS 1.2");
+  }
+  if (sendATCommand("AT+CSSLCFG=\"authmode\",1,0", "OK", 5000)) {
+    LOG_I("LTE", "SSL auth mode: no certificate verification");
+  } else {
+    LOG_W("LTE", "authmode not supported, trying seclevel...");
+    sendATCommand("AT+CSSLCFG=\"seclevel\",1,0", "OK", 5000);
+  }
+  
+  // Bind HTTP stack to SSL context 1
+  if (!sendATCommand("AT+SHSSL=1,\"\"", "OK", 5000)) {
+    LOG_E("LTE", "Failed to bind SSL context (AT+SHSSL)");
+    return false;
+  }
+  LOG_I("LTE", "SSL context bound to HTTP stack");
+
+  // Check current connection state
+  String stateResp;
+  if (sendATCommandGetResponse("AT+SHSTATE?", stateResp, 5000)) {
+    Logger::printf(LOG_INFO, "LTE", "SHSTATE before connect: %s", stateResp.c_str());
+  }
 
   // Open HTTP(S) connection
-  // NOTE: On some SIM7070 firmware versions, AT+SHCONN does not always return
-  // a clean "OK" even when the stack is usable. Treat failures as a warning
-  // and let SHREQ handle actual connection errors.
-  {
-    Logger::printf(LOG_DEBUG, "LTE", "TX: AT+SHCONN");
-    modemSerial->println("AT+SHCONN");
-    String shconnResp = readSerial(15000);
-    Logger::printf(LOG_DEBUG, "LTE", "SHCONN RX: %s", shconnResp.c_str());
-    if (shconnResp.indexOf("OK") >= 0) {
-      LOG_I("LTE", "SHCONN reported OK");
-    } else if (shconnResp.length() > 0) {
-      LOG_W("LTE", "SHCONN did not return OK, proceeding anyway");
+  // SHCONN can take several seconds for HTTPS
+  LOG_I("LTE", "Opening HTTPS connection (this may take 10-30 seconds)...");
+  clearSerialBuffer();
+  modemSerial->println("AT+SHCONN");
+  Logger::printf(LOG_DEBUG, "LTE", "TX: AT+SHCONN");
+  
+  String shconnResp = readSerial(30000);  // Increased to 30s for HTTPS handshake
+  Logger::printf(LOG_DEBUG, "LTE", "SHCONN RX: %s", shconnResp.c_str());
+  
+  // Check if OK or if connection succeeded
+  if (shconnResp.indexOf("OK") >= 0) {
+    LOG_I("LTE", "SHCONN successful");
+  } else {
+    LOG_W("LTE", "SHCONN returned no OK, checking connection state...");
+    
+    // Check SHSTATE to see if connection is established
+    if (sendATCommandGetResponse("AT+SHSTATE?", stateResp, 5000)) {
+      Logger::printf(LOG_INFO, "LTE", "SHSTATE after connect: %s", stateResp.c_str());
+      
+      // Look for state 1 (connected)
+      if (stateResp.indexOf("SHSTATE: 1") >= 0) {
+        LOG_I("LTE", "HTTP connection is active (SHSTATE: 1)");
+      } else {
+        LOG_E("LTE", "HTTP connection not established (SHCONN failed)");
+        sendATCommand("AT+SHDISC", "OK", 5000);
+        return false;
+      }
     } else {
-      LOG_W("LTE", "No SHCONN response (timeout), proceeding anyway");
+      LOG_E("LTE", "Cannot verify HTTP connection state");
+      sendATCommand("AT+SHDISC", "OK", 5000);
+      return false;
     }
   }
 
