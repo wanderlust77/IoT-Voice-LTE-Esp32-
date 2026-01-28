@@ -795,33 +795,66 @@ bool LTEManager::httpPostJsonWithAuth(const char* url, const char* jsonBody, con
     }
   }
 
-  // Basic SSL configuration for HTTPS (use context 1)
-  // Minimal config - just enable SSL
-  LOG_I("LTE", "Configuring SSL for HTTPS...");
+  // Determine if URL is HTTPS
+  bool isHttps = (strstr(url, "https://") == url);
   
   // Try to clear any existing HTTP session first
   sendATCommand("AT+SHDISC", "OK", 2000);  // Ignore errors
   delay(500);
   
-  // Simple SSL config: just set version and disable cert checking
-  sendATCommand("AT+CSSLCFG=\"sslversion\",1,3", "OK", 5000);
+  // SSL configuration only if HTTPS
+  if (isHttps) {
+    LOG_I("LTE", "Configuring SSL for HTTPS...");
+    
+    // Simple SSL config: just set version and disable cert checking
+    sendATCommand("AT+CSSLCFG=\"sslversion\",1,3", "OK", 5000);
+    
+    // Try authmode=0 (no verification)
+    if (!sendATCommand("AT+CSSLCFG=\"authmode\",1,0", "OK", 5000)) {
+      LOG_W("LTE", "authmode not supported, SSL may use defaults");
+    }
+    
+    // Bind HTTP stack to SSL context 1
+    if (!sendATCommand("AT+SHSSL=1,\"\"", "OK", 5000)) {
+      LOG_E("LTE", "Failed to bind SSL context (AT+SHSSL)");
+      return false;
+    }
+    LOG_I("LTE", "SSL configured");
+  } else {
+    LOG_I("LTE", "Using HTTP (no SSL)");
+  }
+
+  // Connect to server
+  LOG_I("LTE", "Connecting to server...");
+  clearSerialBuffer();
+  modemSerial->println("AT+SHCONN");
+  Logger::printf(LOG_DEBUG, "LTE", "TX: AT+SHCONN");
   
-  // Try authmode=0 (no verification)
-  if (!sendATCommand("AT+CSSLCFG=\"authmode\",1,0", "OK", 5000)) {
-    LOG_W("LTE", "authmode not supported, SSL may use defaults");
+  String shconnResp = readSerial(30000);  // 30s timeout for connection
+  Logger::printf(LOG_DEBUG, "LTE", "SHCONN RX: %s", shconnResp.c_str());
+  
+  // Check if connected
+  bool connected = false;
+  if (shconnResp.indexOf("OK") >= 0) {
+    LOG_I("LTE", "Connected to server");
+    connected = true;
+  } else {
+    // Check connection state
+    String stateResp;
+    if (sendATCommandGetResponse("AT+SHSTATE?", stateResp, 5000)) {
+      Logger::printf(LOG_INFO, "LTE", "SHSTATE: %s", stateResp.c_str());
+      if (stateResp.indexOf("1") >= 0) {
+        LOG_I("LTE", "Connection established (verified via SHSTATE)");
+        connected = true;
+      }
+    }
   }
   
-  // Bind HTTP stack to SSL context 1
-  if (!sendATCommand("AT+SHSSL=1,\"\"", "OK", 5000)) {
-    LOG_E("LTE", "Failed to bind SSL context (AT+SHSSL)");
+  if (!connected) {
+    LOG_E("LTE", "Failed to establish HTTP connection");
+    sendATCommand("AT+SHDISC", "OK", 5000);
     return false;
   }
-  LOG_I("LTE", "SSL configured");
-
-  // ALTERNATIVE APPROACH: Skip SHCONN and go directly to SHREQ
-  // Some SIM7070 examples show SHCONN is optional - the connection
-  // happens automatically when SHREQ is issued
-  LOG_I("LTE", "Skipping SHCONN, will connect during SHREQ...");
 
   // Add required headers
   {

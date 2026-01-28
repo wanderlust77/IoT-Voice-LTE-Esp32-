@@ -100,8 +100,14 @@ void setup() {
 // ============================================
 void testVoiceUploadUrl() {
   // Build full URL
+  // NOTE: Testing with HTTP first to verify basic flow, then switch to HTTPS
   char url[256];
-  snprintf(url, sizeof(url), "%s/voice-upload-url", API_BASE_URL);
+  snprintf(url, sizeof(url), "http://httpbin.org/post");  // Test endpoint
+  
+  LOG_W("Main", "========================================");
+  LOG_W("Main", "TESTING WITH HTTP (httpbin.org) FIRST");
+  LOG_W("Main", "Once this works, we'll switch to HTTPS");
+  LOG_W("Main", "========================================");
   
   // Build JSON request body
   // Example: token_uid from NFC (using test value for now)
