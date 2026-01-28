@@ -805,10 +805,21 @@ bool LTEManager::httpPostJsonWithAuth(const char* url, const char* jsonBody, con
   sendATCommand("AT+SHSSL=1,\"\"", "OK", 5000);                // Bind HTTP to SSL ctx 1
 
   // Open HTTP(S) connection
-  if (!sendATCommand("AT+SHCONN", "OK", 15000)) {
-    LOG_E("LTE", "AT+SHCONN failed");
-    sendATCommand("AT+SHDISC", "OK", 5000);
-    return false;
+  // NOTE: On some SIM7070 firmware versions, AT+SHCONN does not always return
+  // a clean "OK" even when the stack is usable. Treat failures as a warning
+  // and let SHREQ handle actual connection errors.
+  {
+    Logger::printf(LOG_DEBUG, "LTE", "TX: AT+SHCONN");
+    modemSerial->println("AT+SHCONN");
+    String shconnResp = readSerial(15000);
+    Logger::printf(LOG_DEBUG, "LTE", "SHCONN RX: %s", shconnResp.c_str());
+    if (shconnResp.indexOf("OK") >= 0) {
+      LOG_I("LTE", "SHCONN reported OK");
+    } else if (shconnResp.length() > 0) {
+      LOG_W("LTE", "SHCONN did not return OK, proceeding anyway");
+    } else {
+      LOG_W("LTE", "No SHCONN response (timeout), proceeding anyway");
+    }
   }
 
   // Add required headers
