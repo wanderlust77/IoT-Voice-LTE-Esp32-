@@ -14,14 +14,38 @@ LTEManager::LTEManager(uint8_t rxPin, uint8_t txPin, uint8_t pwrPin, unsigned lo
 // ============================================
 bool LTEManager::begin() {
   LOG_I("LTE", "Initializing LTE Manager...");
+  Logger::printf(LOG_INFO, "LTE", "UART: RX=%d, TX=%d, Baud=%lu", rxPin, txPin, baudRate);
   
-  // Initialize serial port for modem
+  // Initialize serial port for modem (using HardwareSerial 1)
   modemSerial = new HardwareSerial(1);
   modemSerial->begin(baudRate, SERIAL_8N1, rxPin, txPin);
+  
+  // Small delay for UART to stabilize
+  delay(100);
+  
+  // Test UART connectivity
+  LOG_I("LTE", "Testing UART connectivity...");
+  clearSerialBuffer();
+  modemSerial->println("AT");
+  delay(500);
+  
+  int bytesAvailable = modemSerial->available();
+  Logger::printf(LOG_INFO, "LTE", "UART test: %d bytes available after AT command", bytesAvailable);
+  
+  if (bytesAvailable > 0) {
+    String testResp = "";
+    while (modemSerial->available()) {
+      testResp += (char)modemSerial->read();
+    }
+    Logger::printf(LOG_INFO, "LTE", "UART test response: %s", testResp.c_str());
+  } else {
+    LOG_W("LTE", "UART test: No response - modem may be off or UART misconfigured");
+  }
   
   // Setup power pin
   pinMode(pwrPin, OUTPUT);
   digitalWrite(pwrPin, LOW);
+  Logger::printf(LOG_INFO, "LTE", "PWRKEY pin=%d initialized (LOW)", pwrPin);
   
   LOG_I("LTE", "LTE Manager initialized");
   return true;
@@ -33,6 +57,10 @@ bool LTEManager::begin() {
 bool LTEManager::powerOn() {
   LOG_I("LTE", "Checking if modem is already on...");
   
+  // Clear any garbage in buffer first
+  clearSerialBuffer();
+  delay(100);
+  
   // Increase initial check timeout to 3s
   if (sendATCommand("AT", "OK", 3000)) {
     LOG_I("LTE", "Modem already on");
@@ -40,11 +68,14 @@ bool LTEManager::powerOn() {
   }
   
   LOG_I("LTE", "Modem off, powering on...");
+  LOG_I("LTE", "Sending PWRKEY pulse (1.2s HIGH)...");
   
   // Power cycle: PWR_KEY pulse
   digitalWrite(pwrPin, HIGH);
   delay(1200);  // SIM7070 needs ~1s pulse
   digitalWrite(pwrPin, LOW);
+  
+  LOG_I("LTE", "PWRKEY pulse complete, waiting for boot...");
   
   // Wait for boot sequence
   LOG_I("LTE", "Waiting for modem boot...");
@@ -480,11 +511,13 @@ String LTEManager::readSerial(unsigned long timeout) {
   String result = "";
   unsigned long startTime = millis();
   unsigned long lastByteTime = startTime;
+  int bytesRead = 0;
   
   while (millis() - startTime < timeout) {
     if (modemSerial->available()) {
       char c = modemSerial->read();
       result += c;
+      bytesRead++;
       lastByteTime = millis();
     }
     
@@ -495,6 +528,11 @@ String LTEManager::readSerial(unsigned long timeout) {
     }
     
     delay(10);
+  }
+  
+  // Debug: log if we got absolutely nothing
+  if (bytesRead == 0 && timeout > 1000) {
+    LOG_W("LTE", "readSerial: No data received in timeout period");
   }
   
   return result;
