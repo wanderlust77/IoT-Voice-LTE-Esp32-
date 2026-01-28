@@ -1,221 +1,175 @@
+/*
+ * lte_manager.cpp
+ * 
+ * Implementation of LTE modem manager
+ */
+
 #include "lte_manager.h"
 #include "logger.h"
-#include <Arduino.h>
+#include "config.h"
 
 // ============================================
-// CONSTRUCTOR
+// INITIALIZE LTE MANAGER
 // ============================================
-LTEManager::LTEManager(uint8_t rxPin, uint8_t txPin, uint8_t pwrPin, unsigned long baudRate)
-  : rxPin(rxPin), txPin(txPin), pwrPin(pwrPin), baudRate(baudRate), modemSerial(nullptr) {
-}
-
-// ============================================
-// INITIALIZATION
-// ============================================
-bool LTEManager::begin() {
-  LOG_I("LTE", "Initializing LTE Manager...");
-  Logger::printf(LOG_INFO, "LTE", "UART: RX=%d, TX=%d, Baud=%lu", rxPin, txPin, baudRate);
+bool LTEManager::init(uint8_t txPin, uint8_t rxPin, uint8_t pwrkeyPin, uint8_t resetPin, uint32_t baudRate) {
+  pinPwrkey = pwrkeyPin;
+  pinReset = resetPin;
+  initialized = false;
+  powered = false;
   
-  // Initialize serial port for modem (using HardwareSerial 1)
-  modemSerial = new HardwareSerial(1);
+  LOG_I("LTE", "Initializing LTE modem...");
+  
+  // Configure control pins
+  pinMode(pinPwrkey, OUTPUT);
+  pinMode(pinReset, OUTPUT);
+  digitalWrite(pinPwrkey, HIGH);  // PWRKEY is active LOW
+  digitalWrite(pinReset, HIGH);   // RESET is active LOW
+  
+  // Initialize UART (Serial2 on ESP32)
+  modemSerial = &Serial2;
   modemSerial->begin(baudRate, SERIAL_8N1, rxPin, txPin);
   
-  // Small delay for UART to stabilize
-  delay(100);
+  // Log UART configuration
+  Logger::printf(LOG_INFO, "LTE", "UART: RX=GPIO%d, TX=GPIO%d, Baud=%d", rxPin, txPin, baudRate);
   
-  // Test UART connectivity
-  LOG_I("LTE", "Testing UART connectivity...");
+  // Clear any pending data
   clearSerialBuffer();
-  modemSerial->println("AT");
-  delay(500);
   
-  int bytesAvailable = modemSerial->available();
-  Logger::printf(LOG_INFO, "LTE", "UART test: %d bytes available after AT command", bytesAvailable);
+  initialized = true;
+  LOG_I("LTE", "LTE manager initialized");
   
-  if (bytesAvailable > 0) {
-    String testResp = "";
-    while (modemSerial->available()) {
-      testResp += (char)modemSerial->read();
-    }
-    Logger::printf(LOG_INFO, "LTE", "UART test response: %s", testResp.c_str());
-  } else {
-    LOG_W("LTE", "UART test: No response - modem may be off or UART misconfigured");
-  }
-  
-  // Setup power pin
-  pinMode(pwrPin, OUTPUT);
-  digitalWrite(pwrPin, LOW);
-  Logger::printf(LOG_INFO, "LTE", "PWRKEY pin=%d initialized (LOW)", pwrPin);
-  
-  LOG_I("LTE", "LTE Manager initialized");
   return true;
 }
 
 // ============================================
-// POWER CONTROL
+// POWER ON MODEM
 // ============================================
 bool LTEManager::powerOn() {
+  if (!initialized) {
+    LOG_E("LTE", "Not initialized");
+    return false;
+  }
+  
   LOG_I("LTE", "Checking if modem is already on...");
   
-  // Clear any garbage in buffer first
+  // First, check if modem is already powered on
   clearSerialBuffer();
-  delay(100);
-  
-  // Increase initial check timeout to 3s
-  if (sendATCommand("AT", "OK", 3000)) {
-    LOG_I("LTE", "Modem already on");
-    return true;
-  }
-  
-  LOG_I("LTE", "Modem off, powering on...");
-  LOG_I("LTE", "Sending PWRKEY pulse (1.2s HIGH)...");
-  
-  // Power cycle: PWR_KEY pulse
-  digitalWrite(pwrPin, HIGH);
-  delay(1200);  // SIM7070 needs ~1s pulse
-  digitalWrite(pwrPin, LOW);
-  
-  LOG_I("LTE", "PWRKEY pulse complete, waiting for boot...");
-  
-  // Wait for boot sequence
-  LOG_I("LTE", "Waiting for modem boot...");
-  
-  // SIM7070 can take 5-20 seconds to fully boot
-  // During boot, it sends unsolicited responses like:
-  //   +CFUN: 1
-  //   +CPIN: READY
-  //   SMS Ready
-  // We need to wait for these and then send AT to get OK
-  
-  // Wait up to 30 seconds total
-  unsigned long bootStart = millis();
-  int attempts = 15;  // Check every 2 seconds
-  
-  while (attempts > 0) {
-    delay(2000);  // Check interval
-    
-    // Clear any boot messages
-    clearSerialBuffer();
-    
-    // Try sending AT command
-    modemSerial->println("AT");
-    Logger::printf(LOG_DEBUG, "LTE", "TX: AT (boot check)");
-    
-    // Read response (with 3s timeout)
-    String response = readSerial(3000);
-    Logger::printf(LOG_DEBUG, "LTE", "RX: %s", response.c_str());
-    
-    // Check if we got OK in the response
-    if (response.indexOf("OK") >= 0) {
-      LOG_I("LTE", "Modem boot complete");
+  for (int i = 0; i < 3; i++) {
+    if (sendATCommand("AT", "OK", 1000)) {
+      powered = true;
+      LOG_I("LTE", "Modem already powered on");
       return true;
     }
+    delay(500);
+  }
+  
+  // Modem not responding - power it on
+  LOG_I("LTE", "Modem off, powering on...");
+  
+  // Pulse PWRKEY low for 1.5 seconds
+  digitalWrite(pinPwrkey, LOW);
+  delay(1500);
+  digitalWrite(pinPwrkey, HIGH);
+  
+  // Wait for modem to boot (LTE modems can take 10-15 seconds)
+  LOG_I("LTE", "Waiting for modem boot (up to 15s)...");
+  
+  // Try AT command every 2 seconds for up to 15 seconds
+  for (int attempt = 0; attempt < 8; attempt++) {
+    delay(2000);
+    Logger::printf(LOG_INFO, "LTE", "Boot check %d/8...", attempt + 1);
     
-    // Check for specific boot messages
-    if (response.indexOf("READY") >= 0 || response.indexOf("+CFUN:") >= 0) {
-      LOG_I("LTE", "Modem booting (received status message)...");
-    } else if (response.length() == 0) {
-      LOG_W("LTE", "No response from modem yet...");
-    }
-    
-    attempts--;
-    
-    if (millis() - bootStart > 30000) {
-      LOG_E("LTE", "Modem boot timeout (30s)");
-      return false;
+    clearSerialBuffer();
+    if (sendATCommand("AT", "OK", 2000)) {
+      powered = true;
+      Logger::printf(LOG_INFO, "LTE", "Modem responded after %d seconds", (attempt + 1) * 2);
+      return true;
     }
   }
   
-  LOG_E("LTE", "Failed to power on modem");
+  LOG_E("LTE", "Failed to communicate with modem after power-on");
+  LOG_I("LTE", "Check: 1) UART wiring, 2) Modem power (5V), 3) TX/RX not swapped");
   return false;
 }
 
-void LTEManager::powerOff() {
+// ============================================
+// POWER OFF MODEM
+// ============================================
+bool LTEManager::powerOff() {
+  if (!powered) {
+    return true;
+  }
+  
   LOG_I("LTE", "Powering off modem...");
-  sendATCommand("AT+CPOWD=1", "OK", 5000);
-  delay(2000);
+  
+  // Pulse PWRKEY to turn off
+  digitalWrite(pinPwrkey, LOW);
+  delay(1500);
+  digitalWrite(pinPwrkey, HIGH);
+  
+  powered = false;
+  return true;
 }
 
 // ============================================
-// NETWORK OPERATIONS
+// CHECK NETWORK REGISTRATION
 // ============================================
-bool LTEManager::checkNetwork(unsigned long timeout) {
+bool LTEManager::checkNetwork(uint32_t timeout_ms) {
+  if (!powered) {
+    LOG_E("LTE", "Modem not powered");
+    return false;
+  }
+  
   LOG_I("LTE", "Checking network registration...");
   
-  // Enable unsolicited network registration notifications
-  // AT+CREG=2: Enable network registration and location info URC
-  if (!sendATCommand("AT+CREG=2", "OK", 5000)) {
-    LOG_W("LTE", "Failed to enable CREG notifications");
+  // Check SIM status
+  String pinResponse;
+  if (!sendATCommandGetResponse("AT+CPIN?", pinResponse, 5000)) {
+    LOG_E("LTE", "Failed to query SIM PIN status");
+    return false;
   }
   
-  // Check signal strength first
-  String csqResp;
-  if (sendATCommandGetResponse("AT+CSQ", csqResp, 5000)) {
-    Logger::printf(LOG_INFO, "LTE", "Signal check response: %s", csqResp.c_str());
+  // Check if SIM requires PIN
+  if (pinResponse.indexOf("+CPIN: SIM PIN") >= 0) {
+    LOG_I("LTE", "SIM requires PIN unlock");
     
-    // Parse CSQ response: +CSQ: <rssi>,<ber>
-    int csqPos = csqResp.indexOf("+CSQ:");
-    if (csqPos >= 0) {
-      int rssi = -1;
-      int ber = -1;
-      sscanf(csqResp.c_str() + csqPos, "+CSQ: %d,%d", &rssi, &ber);
+    // Check if PIN is configured
+    if (strlen(LTE_PIN) > 0) {
+      char pinCmd[32];
+      snprintf(pinCmd, sizeof(pinCmd), "AT+CPIN=%s", LTE_PIN);
       
-      if (rssi == 99) {
-        LOG_W("LTE", "No signal detected (CSQ: 99,99)");
-        LOG_W("LTE", "Check antenna connection!");
-      } else if (rssi >= 0 && rssi < 10) {
-        Logger::printf(LOG_WARN, "LTE", "Weak signal (RSSI: %d)", rssi);
-      } else if (rssi >= 10) {
-        Logger::printf(LOG_INFO, "LTE", "Good signal (RSSI: %d)", rssi);
+      if (!sendATCommand(pinCmd, "OK", 5000)) {
+        LOG_E("LTE", "Failed to unlock SIM with PIN");
+        return false;
       }
+      
+      LOG_I("LTE", "SIM unlocked successfully");
+      delay(2000);  // Wait for SIM to initialize after unlock
+    } else {
+      LOG_E("LTE", "SIM requires PIN but LTE_PIN not configured");
+      return false;
     }
+  } else if (pinResponse.indexOf("+CPIN: READY") >= 0) {
+    LOG_I("LTE", "SIM ready (no PIN required)");
+  } else {
+    Logger::printf(LOG_ERROR, "LTE", "Unexpected SIM status: %s", pinResponse.c_str());
+    return false;
   }
   
-  // Check registration status
+  // Wait for network registration
   unsigned long startTime = millis();
-  int consecutiveFailures = 0;
-  const int maxConsecutiveFailures = 5;
-  
-  while (millis() - startTime < timeout) {
+  while (millis() - startTime < timeout_ms) {
     String response;
     if (sendATCommandGetResponse("AT+CREG?", response, 5000)) {
-      Logger::printf(LOG_DEBUG, "LTE", "CREG response: %s", response.c_str());
-      consecutiveFailures = 0;  // Reset counter on successful response
-      
-      // Parse response: +CREG: <n>,<stat>[,<lac>,<ci>]
-      // stat: 0=not registered, 1=registered home, 2=searching, 3=denied, 4=unknown, 5=registered roaming
-      int cregPos = response.indexOf("+CREG:");
-      if (cregPos >= 0) {
-        int n, stat;
-        sscanf(response.c_str() + cregPos, "+CREG: %d,%d", &n, &stat);
-        
-        if (stat == 1 || stat == 5) {
-          LOG_I("LTE", "Network registered!");
-          return true;
-        } else if (stat == 2) {
-          LOG_I("LTE", "Searching for network...");
-        } else if (stat == 3) {
-          LOG_E("LTE", "Registration denied");
-          return false;
-        } else if (stat == 0) {
-          LOG_W("LTE", "Not registered (searching disabled?)");
-        }
+      // Look for +CREG: 0,1 (registered) or +CREG: 0,5 (roaming)
+      if (response.indexOf("+CREG: 0,1") >= 0 || response.indexOf("+CREG: 0,5") >= 0) {
+        LOG_I("LTE", "Network registered");
+        return true;
       }
-    } else {
-      consecutiveFailures++;
-      Logger::printf(LOG_WARN, "LTE", "AT+CREG? failed (attempt %d/%d)", consecutiveFailures, maxConsecutiveFailures);
       
-      if (consecutiveFailures >= maxConsecutiveFailures) {
-        LOG_E("LTE", "Modem not responding to CREG queries");
-        
-        // Try a simple AT command to check if modem is still alive
-        if (sendATCommand("AT", "OK", 3000)) {
-          LOG_W("LTE", "Modem still responsive, continuing...");
-          consecutiveFailures = 0;
-        } else {
-          LOG_E("LTE", "Modem not responding at all!");
-          return false;
-        }
+      if (response.indexOf("+CREG: 0,3") >= 0) {
+        LOG_E("LTE", "Network registration denied");
+        return false;
       }
     }
     
@@ -226,344 +180,492 @@ bool LTEManager::checkNetwork(unsigned long timeout) {
   return false;
 }
 
+// ============================================
+// CONFIGURE BEARER APN
+// ============================================
 bool LTEManager::configureBearerAPN(const char* apn) {
-  LOG_I("LTE", "Configuring APN...");
-  Logger::printf(LOG_INFO, "LTE", "APN: %s", apn);
+  LOG_I("LTE", "Configuring bearer APN...");
   
-  // SIM7070E uses AT+CGDCONT instead of SAPBR
-  // Format: AT+CGDCONT=<cid>,"<PDP_type>","<APN>"
+  // Set connection type to GPRS
+  if (!sendATCommand("AT+SAPBR=3,1,\"CONTYPE\",\"GPRS\"", "OK", 5000)) {
+    LOG_E("LTE", "Failed to set connection type");
+    return false;
+  }
+  
+  // Set APN
   char cmd[128];
-  snprintf(cmd, sizeof(cmd), "AT+CGDCONT=1,\"IP\",\"%s\"", apn);
-  
+  snprintf(cmd, sizeof(cmd), "AT+SAPBR=3,1,\"APN\",\"%s\"", apn);
   if (!sendATCommand(cmd, "OK", 5000)) {
-    LOG_E("LTE", "Failed to configure APN!");
+    LOG_E("LTE", "Failed to set APN");
     return false;
   }
   
-  LOG_I("LTE", "APN configured");
+  LOG_I("LTE", "Bearer APN configured");
   return true;
 }
 
+// ============================================
+// OPEN BEARER CONNECTION
+// ============================================
 bool LTEManager::openBearer() {
-  LOG_I("LTE", "Activating PDP context...");
+  LOG_I("LTE", "Opening bearer...");
   
-  // SIM7070E uses AT+CNACT instead of SAPBR
-  // Format: AT+CNACT=<pdpidx>,<action>
-  // pdpidx: 0-2 (use 0)
-  // action: 0=deactivate, 1=activate
-  
-  // First check if already active
-  String checkResp;
-  if (sendATCommandGetResponse("AT+CNACT?", checkResp, 5000)) {
-    Logger::printf(LOG_INFO, "LTE", "PDP check: %s", checkResp.c_str());
-    // Response: +CNACT: <pdpidx>,<status>,"<ip_addr>"
-    // status: 0=inactive, 1=active
-    if (checkResp.indexOf("+CNACT: 0,1") >= 0) {
-      LOG_I("LTE", "PDP context already active");
+  // Check if already open
+  String response;
+  if (sendATCommandGetResponse("AT+SAPBR=2,1", response, 5000)) {
+    if (response.indexOf("0.0.0.0") < 0) {
+      LOG_I("LTE", "Bearer already open");
       return true;
     }
   }
   
-  // Activate PDP context
-  if (!sendATCommand("AT+CNACT=0,1", "OK", 30000)) {
-    LOG_E("LTE", "Failed to activate PDP context!");
+  // Open bearer
+  if (!sendATCommand("AT+SAPBR=1,1", "OK", 30000)) {
+    LOG_E("LTE", "Failed to open bearer");
     return false;
   }
   
-  // Verify activation
-  delay(1000);
-  if (sendATCommandGetResponse("AT+CNACT?", checkResp, 5000)) {
-    Logger::printf(LOG_INFO, "LTE", "PDP status: %s", checkResp.c_str());
-    if (checkResp.indexOf("+CNACT: 0,1") >= 0) {
-      LOG_I("LTE", "PDP context activated");
-      return true;
-    }
+  // Verify bearer is open
+  if (sendATCommandGetResponse("AT+SAPBR=2,1", response, 5000)) {
+    Logger::printf(LOG_INFO, "LTE", "Bearer status: %s", response.c_str());
   }
   
-  LOG_E("LTE", "PDP context activation verification failed");
-  return false;
-}
-
-bool LTEManager::closeBearer() {
-  LOG_I("LTE", "Deactivating PDP context...");
-  
-  // SIM7070E: AT+CNACT=0,0 to deactivate
-  if (!sendATCommand("AT+CNACT=0,0", "OK", 30000)) {
-    LOG_E("LTE", "Failed to deactivate PDP context");
-    return false;
-  }
-  
-  LOG_I("LTE", "PDP context deactivated");
+  LOG_I("LTE", "Bearer opened");
   return true;
 }
 
 // ============================================
-// HTTP POST JSON WITH BEARER TOKEN AUTH
+// CLOSE BEARER CONNECTION
 // ============================================
-bool LTEManager::httpPostJsonWithAuth(const char* url, const char* jsonBody, const char* bearerToken, String& response) {
-  LOG_I("LTE", "HTTP POST JSON with Bearer auth (trying HTTPINIT method)...");
-  Logger::printf(LOG_INFO, "LTE", "URL: %s", url);
-  Logger::printf(LOG_INFO, "LTE", "Body: %s", jsonBody);
+bool LTEManager::closeBearer() {
+  LOG_I("LTE", "Closing bearer...");
+  sendATCommand("AT+SAPBR=0,1", "OK", 10000);
+  return true;
+}
+
+// ============================================
+// HTTP GET REQUEST
+// ============================================
+bool LTEManager::httpGet(const char* url, uint8_t* buffer, size_t* length, size_t maxLength) {
+  LOG_I("LTE", "HTTP GET...");
   
-  response = "";
+  *length = 0;
   
-  // Try the older, simpler HTTP command set (HTTPINIT, HTTPPARA, HTTPACTION)
-  // This is more widely supported and doesn't require SHCONN
-  
-  // 1. Initialize HTTP service
-  LOG_I("LTE", "Initializing HTTP service...");
-  if (!sendATCommand("AT+HTTPINIT", "OK", 5000)) {
-    LOG_E("LTE", "Failed to initialize HTTP service (not supported?)");
-    return false;
-  }
-  
-  // 2. Set HTTP parameters
-  char cmd[512];
-  
-  // Set CID (use same as PDP context)
-  snprintf(cmd, sizeof(cmd), "AT+HTTPPARA=\"CID\",1");
-  if (!sendATCommand(cmd, "OK", 5000)) {
-    LOG_E("LTE", "Failed to set CID");
-    sendATCommand("AT+HTTPTERM", "OK", 2000);
+  // Initialize HTTP
+  if (!httpInit()) {
     return false;
   }
   
   // Set URL
-  snprintf(cmd, sizeof(cmd), "AT+HTTPPARA=\"URL\",\"%s\"", url);
-  if (!sendATCommand(cmd, "OK", 5000)) {
-    LOG_E("LTE", "Failed to set URL");
-    sendATCommand("AT+HTTPTERM", "OK", 2000);
-    return false;
-  }
-  LOG_I("LTE", "URL configured");
-  
-  // Set Content-Type
-  if (!sendATCommand("AT+HTTPPARA=\"CONTENT\",\"application/json\"", "OK", 5000)) {
-    LOG_E("LTE", "Failed to set content type");
-    sendATCommand("AT+HTTPTERM", "OK", 2000);
+  if (!httpSetParameter("URL", url)) {
+    httpTerminate();
     return false;
   }
   
-  // 3. Set custom headers (Authorization)
-  // Format: AT+HTTPPARA="USERDATA","Authorization: Bearer token"
-  char authHeader[300];
-  snprintf(authHeader, sizeof(authHeader), "Authorization: Bearer %s", bearerToken);
-  snprintf(cmd, sizeof(cmd), "AT+HTTPPARA=\"USERDATA\",\"%s\"", authHeader);
-  if (!sendATCommand(cmd, "OK", 5000)) {
-    LOG_W("LTE", "Failed to set Authorization header (may not be supported)");
-    // Continue anyway - some modems don't support USERDATA
-  }
-  
-  // 4. Send POST data
-  int bodyLen = strlen(jsonBody);
-  LOG_I("LTE", "Sending POST body...");
-  
-  clearSerialBuffer();
-  snprintf(cmd, sizeof(cmd), "AT+HTTPDATA=%d,10000", bodyLen);
-  modemSerial->println(cmd);
-  Logger::printf(LOG_DEBUG, "LTE", "TX: %s", cmd);
-  
-  // Wait for DOWNLOAD prompt
-  unsigned long startTime = millis();
-  bool downloadPrompt = false;
-  while (millis() - startTime < 5000) {
-    if (modemSerial->available()) {
-      String resp = modemSerial->readString();
-      Logger::printf(LOG_DEBUG, "LTE", "RX: %s", resp.c_str());
-      if (resp.indexOf("DOWNLOAD") >= 0) {
-        downloadPrompt = true;
-        break;
-      }
-    }
-    delay(10);
-  }
-  
-  if (!downloadPrompt) {
-    LOG_E("LTE", "No DOWNLOAD prompt received");
-    sendATCommand("AT+HTTPTERM", "OK", 2000);
+  // Set CID
+  if (!httpSetParameter("CID", "1")) {
+    httpTerminate();
     return false;
   }
   
-  // Send JSON body
-  modemSerial->print(jsonBody);
-  Logger::printf(LOG_DEBUG, "LTE", "Sent body: %s", jsonBody);
-  
-  // Wait for OK
-  String dataResp = readSerial(10000);
-  Logger::printf(LOG_DEBUG, "LTE", "Data response: %s", dataResp.c_str());
-  if (dataResp.indexOf("OK") < 0) {
-    LOG_E("LTE", "Failed to send POST data");
-    sendATCommand("AT+HTTPTERM", "OK", 2000);
+  // Execute GET
+  int statusCode, dataLength;
+  if (!httpAction(HTTP_GET, &statusCode, &dataLength)) {
+    httpTerminate();
     return false;
   }
   
-  LOG_I("LTE", "POST data sent successfully");
-  
-  // 5. Execute HTTP POST action
-  // AT+HTTPACTION=<method>
-  // method: 0=GET, 1=POST, 2=HEAD
-  LOG_I("LTE", "Executing HTTP POST...");
-  clearSerialBuffer();
-  modemSerial->println("AT+HTTPACTION=1");
-  Logger::printf(LOG_DEBUG, "LTE", "TX: AT+HTTPACTION=1");
-  
-  // Wait for +HTTPACTION: <method>,<status_code>,<datalen>
-  // This can take a while (up to 60s)
-  startTime = millis();
-  int statusCode = -1;
-  int dataLen = 0;
-  bool actionComplete = false;
-  
-  while (millis() - startTime < 60000) {  // 60s timeout
-    if (modemSerial->available()) {
-      String resp = readSerial(10000);
-      Logger::printf(LOG_DEBUG, "LTE", "Action response: %s", resp.c_str());
-      
-      int pos = resp.indexOf("+HTTPACTION:");
-      if (pos >= 0) {
-        int method, status, datalen;
-        if (sscanf(resp.c_str() + pos, "+HTTPACTION: %d,%d,%d", &method, &status, &datalen) == 3) {
-          statusCode = status;
-          dataLen = datalen;
-          actionComplete = true;
-          Logger::printf(LOG_INFO, "LTE", "HTTP Response: Status=%d, DataLen=%d", statusCode, dataLen);
-          break;
-        }
-      }
-    }
-    delay(100);
-  }
-  
-  if (!actionComplete) {
-    LOG_E("LTE", "HTTP POST timeout");
-    sendATCommand("AT+HTTPTERM", "OK", 2000);
-    return false;
-  }
+  Logger::printf(LOG_INFO, "LTE", "HTTP status: %d, length: %d", statusCode, dataLength);
   
   // Check status code
-  if (statusCode != 200 && statusCode != 201) {
-    Logger::printf(LOG_ERROR, "LTE", "HTTP error: Status code %d", statusCode);
-    sendATCommand("AT+HTTPTERM", "OK", 2000);
+  if (statusCode != 200) {
+    LOG_E("LTE", "HTTP request failed");
+    httpTerminate();
     return false;
   }
   
-  // 6. Read response data if available
-  if (dataLen > 0) {
-    LOG_I("LTE", "Reading HTTP response...");
-    clearSerialBuffer();
-    
-    snprintf(cmd, sizeof(cmd), "AT+HTTPREAD=0,%d", dataLen);
-    modemSerial->println(cmd);
-    Logger::printf(LOG_DEBUG, "LTE", "TX: %s", cmd);
-    
-    String readResp = readSerial(15000);
-    Logger::printf(LOG_DEBUG, "LTE", "Read response: %s", readResp.c_str());
-    
-    // Parse response data
-    // Format: +HTTPREAD: <datalen>\r\n<data>\r\nOK
-    int dataStart = readResp.indexOf("\n") + 1;  // After +HTTPREAD: line
-    int dataEnd = readResp.lastIndexOf("\r\nOK");
-    if (dataEnd < 0) dataEnd = readResp.lastIndexOf("\nOK");
-    
-    if (dataStart > 0 && dataEnd > dataStart) {
-      response = readResp.substring(dataStart, dataEnd);
-      response.trim();
-      Logger::printf(LOG_INFO, "LTE", "Response data: %s", response.c_str());
-    }
+  // Read data
+  if (!httpRead(buffer, length, maxLength)) {
+    httpTerminate();
+    return false;
   }
   
-  // 7. Terminate HTTP service
-  sendATCommand("AT+HTTPTERM", "OK", 5000);
+  // Terminate HTTP
+  httpTerminate();
   
-  LOG_I("LTE", "HTTP POST complete");
+  Logger::printf(LOG_INFO, "LTE", "HTTP GET complete: %d bytes", *length);
   return true;
 }
 
 // ============================================
-// AT COMMAND UTILITIES
+// HTTP POST REQUEST
 // ============================================
-bool LTEManager::sendATCommand(const char* cmd, const char* expectedResponse, unsigned long timeout) {
-  clearSerialBuffer();
+bool LTEManager::httpPost(const char* url, const uint8_t* data, size_t length) {
+  LOG_I("LTE", "HTTP POST...");
   
-  modemSerial->println(cmd);
+  // Initialize HTTP
+  if (!httpInit()) {
+    return false;
+  }
+  
+  // Set URL
+  if (!httpSetParameter("URL", url)) {
+    httpTerminate();
+    return false;
+  }
+  
+  // Set CID
+  if (!httpSetParameter("CID", "1")) {
+    httpTerminate();
+    return false;
+  }
+  
+  // Set content type
+  if (!httpSetParameter("CONTENT", "application/octet-stream")) {
+    httpTerminate();
+    return false;
+  }
+  
+  // Upload data
+  if (!httpPostData(data, length)) {
+    httpTerminate();
+    return false;
+  }
+  
+  // Execute POST
+  int statusCode, dataLength;
+  if (!httpAction(HTTP_POST, &statusCode, &dataLength)) {
+    httpTerminate();
+    return false;
+  }
+  
+  Logger::printf(LOG_INFO, "LTE", "HTTP POST status: %d", statusCode);
+  
+  // Terminate HTTP
+  httpTerminate();
+  
+  if (statusCode == 200 || statusCode == 201) {
+    LOG_I("LTE", "HTTP POST complete");
+    return true;
+  }
+  
+  LOG_E("LTE", "HTTP POST failed");
+  return false;
+}
+
+// ============================================
+// UPDATE (process incoming data)
+// ============================================
+void LTEManager::update() {
+  // Process any unsolicited messages from modem
+  while (modemSerial->available()) {
+    char c = modemSerial->read();
+    // Could log unsolicited responses here if needed
+  }
+}
+
+// ============================================
+// SEND AT COMMAND
+// ============================================
+bool LTEManager::sendATCommand(const char* cmd, const char* expected, uint32_t timeout_ms) {
   Logger::printf(LOG_DEBUG, "LTE", "TX: %s", cmd);
   
-  String response = readSerial(timeout);
-  Logger::printf(LOG_DEBUG, "LTE", "Received %d bytes", response.length());
+  clearSerialBuffer();
+  modemSerial->println(cmd);
+  
+  return waitForResponse(expected, timeout_ms);
+}
+
+// ============================================
+// SEND AT COMMAND AND GET RESPONSE
+// ============================================
+bool LTEManager::sendATCommandGetResponse(const char* cmd, String& response, uint32_t timeout_ms) {
+  Logger::printf(LOG_DEBUG, "LTE", "TX: %s", cmd);
+  
+  clearSerialBuffer();
+  modemSerial->println(cmd);
+  
+  response = readSerial(timeout_ms);
   Logger::printf(LOG_DEBUG, "LTE", "RX: %s", response.c_str());
   
-  return (response.indexOf(expectedResponse) >= 0);
+  return response.length() > 0;
 }
 
-bool LTEManager::sendATCommandGetResponse(const char* cmd, String& response, unsigned long timeout) {
-  clearSerialBuffer();
+// ============================================
+// WAIT FOR RESPONSE
+// ============================================
+bool LTEManager::waitForResponse(const char* expected, uint32_t timeout_ms) {
+  String response = readSerial(timeout_ms);
+  Logger::printf(LOG_DEBUG, "LTE", "RX: %s", response.c_str());
   
-  modemSerial->println(cmd);
-  Logger::printf(LOG_DEBUG, "LTE", "TX: %s", cmd);
-  
-  response = readSerial(timeout);
-  Logger::printf(LOG_DEBUG, "LTE", "Received %d bytes", response.length());
-  
-  return (response.indexOf("OK") >= 0);
+  return response.indexOf(expected) >= 0;
 }
 
-String LTEManager::readSerial(unsigned long timeout) {
-  String result = "";
-  unsigned long startTime = millis();
-  unsigned long lastByteTime = startTime;
-  int bytesRead = 0;
-  
-  while (millis() - startTime < timeout) {
-    if (modemSerial->available()) {
-      char c = modemSerial->read();
-      result += c;
-      bytesRead++;
-      lastByteTime = millis();
-    }
-    
-    // If we've received data and there's been no new data for 200ms, 
-    // assume the response is complete
-    if (result.length() > 0 && (millis() - lastByteTime > 200)) {
-      break;
-    }
-    
-    delay(10);
-  }
-  
-  // Debug: log if we got absolutely nothing
-  if (bytesRead == 0 && timeout > 1000) {
-    LOG_W("LTE", "readSerial: No data received in timeout period");
-  }
-  
-  return result;
-}
-
+// ============================================
+// CLEAR SERIAL BUFFER
+// ============================================
 void LTEManager::clearSerialBuffer() {
   while (modemSerial->available()) {
     modemSerial->read();
   }
 }
 
-bool LTEManager::waitForResponse(const char* expected, unsigned long timeout) {
+// ============================================
+// READ SERIAL DATA
+// ============================================
+String LTEManager::readSerial(uint32_t timeout_ms) {
+  String result = "";
   unsigned long startTime = millis();
-  String buffer = "";
+  int bytesReceived = 0;
   
-  while (millis() - startTime < timeout) {
-    if (modemSerial->available()) {
+  while (millis() - startTime < timeout_ms) {
+    while (modemSerial->available()) {
       char c = modemSerial->read();
-      buffer += c;
-      
-      if (buffer.indexOf(expected) >= 0) {
-        return true;
-      }
-      
-      // Limit buffer size
-      if (buffer.length() > 1024) {
-        buffer = buffer.substring(buffer.length() - 512);
-      }
+      result += c;
+      bytesReceived++;
+      startTime = millis();  // Reset timeout on data received
     }
     delay(10);
   }
   
+  // Debug: show if we received any bytes at all
+  if (bytesReceived > 0) {
+    Logger::printf(LOG_DEBUG, "LTE", "Received %d bytes", bytesReceived);
+  } else {
+    Logger::printf(LOG_DEBUG, "LTE", "No data received (timeout %dms)", timeout_ms);
+  }
+  
+  return result;
+}
+
+// ============================================
+// HTTP INIT
+// ============================================
+bool LTEManager::httpInit() {
+  return sendATCommand("AT+HTTPINIT", "OK", 5000);
+}
+
+// ============================================
+// HTTP SET PARAMETER
+// ============================================
+bool LTEManager::httpSetParameter(const char* param, const char* value) {
+  char cmd[256];
+  snprintf(cmd, sizeof(cmd), "AT+HTTPPARA=\"%s\",\"%s\"", param, value);
+  return sendATCommand(cmd, "OK", 5000);
+}
+
+// ============================================
+// HTTP ACTION
+// ============================================
+bool LTEManager::httpAction(HttpMethod method, int* statusCode, int* dataLength) {
+  char cmd[32];
+  snprintf(cmd, sizeof(cmd), "AT+HTTPACTION=%d", method);
+  
+  modemSerial->println(cmd);
+  Logger::printf(LOG_DEBUG, "LTE", "TX: %s", cmd);
+  
+  // Wait for +HTTPACTION response (can take several seconds)
+  String response = readSerial(30000);
+  Logger::printf(LOG_DEBUG, "LTE", "RX: %s", response.c_str());
+  
+  // Parse response: +HTTPACTION: <method>,<status>,<length>
+  int actionStart = response.indexOf("+HTTPACTION:");
+  if (actionStart >= 0) {
+    int commaPos1 = response.indexOf(',', actionStart);
+    int commaPos2 = response.indexOf(',', commaPos1 + 1);
+    
+    if (commaPos1 > 0 && commaPos2 > 0) {
+      *statusCode = response.substring(commaPos1 + 1, commaPos2).toInt();
+      *dataLength = response.substring(commaPos2 + 1).toInt();
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+// ============================================
+// HTTP READ
+// ============================================
+bool LTEManager::httpRead(uint8_t* buffer, size_t* length, size_t maxLength) {
+  modemSerial->println("AT+HTTPREAD");
+  LOG_D("LTE", "TX: AT+HTTPREAD");
+  
+  // Wait for +HTTPREAD: header
+  String response = readSerial(10000);
+  Logger::printf(LOG_DEBUG, "LTE", "RX: %s", response.c_str());
+  
+  // Parse +HTTPREAD: <length>
+  int readStart = response.indexOf("+HTTPREAD:");
+  if (readStart < 0) {
+    LOG_E("LTE", "HTTPREAD response not found");
+    return false;
+  }
+  
+  int dataStart = response.indexOf('\n', readStart);
+  if (dataStart < 0) {
+    LOG_E("LTE", "Data start not found");
+    return false;
+  }
+  dataStart++;  // Skip newline
+  
+  // Copy data to buffer
+  size_t dataLen = response.length() - dataStart;
+  size_t copyLen = (dataLen < maxLength) ? dataLen : maxLength;
+  
+  for (size_t i = 0; i < copyLen; i++) {
+    buffer[i] = response[dataStart + i];
+  }
+  
+  *length = copyLen;
+  return true;
+}
+
+// ============================================
+// HTTP POST DATA
+// ============================================
+bool LTEManager::httpPostData(const uint8_t* data, size_t length) {
+  char cmd[64];
+  snprintf(cmd, sizeof(cmd), "AT+HTTPDATA=%d,10000", length);
+  
+  modemSerial->println(cmd);
+  Logger::printf(LOG_DEBUG, "LTE", "TX: %s", cmd);
+  
+  // Wait for DOWNLOAD prompt
+  if (!waitForResponse("DOWNLOAD", 5000)) {
+    LOG_E("LTE", "DOWNLOAD prompt not received");
+    return false;
+  }
+  
+  // Send binary data
+  modemSerial->write(data, length);
+  LOG_D("LTE", "Sent binary data");
+  
+  // Wait for OK
+  return waitForResponse("OK", 15000);
+}
+
+// ============================================
+// HTTP TERMINATE
+// ============================================
+bool LTEManager::httpTerminate() {
+  return sendATCommand("AT+HTTPTERM", "OK", 5000);
+}
+
+// ============================================
+// HTTP POST JSON WITH BEARER TOKEN AUTH
+// ============================================
+bool LTEManager::httpPostJsonWithAuth(const char* url, const char* jsonBody, const char* bearerToken, String& response) {
+  LOG_I("LTE", "HTTP POST JSON with Bearer auth...");
+  Logger::printf(LOG_INFO, "LTE", "URL: %s", url);
+  Logger::printf(LOG_INFO, "LTE", "Body: %s", jsonBody);
+  
+  response = "";
+  
+  // Initialize HTTP
+  if (!httpInit()) {
+    LOG_E("LTE", "HTTP init failed");
+    return false;
+  }
+  
+  // Enable SSL/TLS for HTTPS
+  if (!sendATCommand("AT+HTTPSSL=1", "OK", 5000)) {
+    LOG_W("LTE", "Failed to enable SSL (may not be supported)");
+    // Continue anyway - some modems handle HTTPS automatically
+  }
+  
+  // Set URL
+  if (!httpSetParameter("URL", url)) {
+    LOG_E("LTE", "Failed to set URL");
+    httpTerminate();
+    return false;
+  }
+  
+  // Set CID
+  if (!httpSetParameter("CID", "1")) {
+    LOG_E("LTE", "Failed to set CID");
+    httpTerminate();
+    return false;
+  }
+  
+  // Set Authorization header using USERDATA parameter
+  char authHeader[256];
+  snprintf(authHeader, sizeof(authHeader), "Authorization: Bearer %s", bearerToken);
+  if (!httpSetParameter("USERDATA", authHeader)) {
+    LOG_E("LTE", "Failed to set Authorization header");
+    httpTerminate();
+    return false;
+  }
+  
+  // Set content type to JSON
+  if (!httpSetParameter("CONTENT", "application/json")) {
+    LOG_E("LTE", "Failed to set content type");
+    httpTerminate();
+    return false;
+  }
+  
+  // Upload JSON body
+  size_t jsonLen = strlen(jsonBody);
+  char cmd[64];
+  snprintf(cmd, sizeof(cmd), "AT+HTTPDATA=%d,10000", jsonLen);
+  
+  modemSerial->println(cmd);
+  Logger::printf(LOG_DEBUG, "LTE", "TX: %s", cmd);
+  
+  // Wait for DOWNLOAD prompt
+  if (!waitForResponse("DOWNLOAD", 5000)) {
+    LOG_E("LTE", "DOWNLOAD prompt not received");
+    httpTerminate();
+    return false;
+  }
+  
+  // Send JSON data
+  modemSerial->print(jsonBody);
+  Logger::printf(LOG_DEBUG, "LTE", "Sent JSON: %s", jsonBody);
+  
+  // Wait for OK
+  if (!waitForResponse("OK", 15000)) {
+    LOG_E("LTE", "Failed to upload JSON data");
+    httpTerminate();
+    return false;
+  }
+  
+  // Execute POST
+  int statusCode, dataLength;
+  if (!httpAction(HTTP_POST, &statusCode, &dataLength)) {
+    LOG_E("LTE", "HTTP POST action failed");
+    httpTerminate();
+    return false;
+  }
+  
+  Logger::printf(LOG_INFO, "LTE", "HTTP POST status: %d, response length: %d", statusCode, dataLength);
+  
+  // Read response
+  if (dataLength > 0) {
+    uint8_t* buffer = (uint8_t*)malloc(dataLength + 1);
+    if (buffer) {
+      size_t readLength = dataLength;
+      if (httpRead(buffer, &readLength, dataLength)) {
+        buffer[readLength] = '\0';
+        response = String((char*)buffer);
+        Logger::printf(LOG_INFO, "LTE", "Response: %s", response.c_str());
+      } else {
+        LOG_E("LTE", "Failed to read HTTP response");
+      }
+      free(buffer);
+    } else {
+      LOG_E("LTE", "Failed to allocate response buffer");
+    }
+  }
+  
+  // Terminate HTTP
+  httpTerminate();
+  
+  if (statusCode >= 200 && statusCode < 300) {
+    LOG_I("LTE", "HTTP POST JSON successful");
+    return true;
+  }
+  
+  Logger::printf(LOG_ERROR, "LTE", "HTTP POST failed with status %d", statusCode);
   return false;
 }
