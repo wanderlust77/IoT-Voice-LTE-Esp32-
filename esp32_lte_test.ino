@@ -57,7 +57,15 @@ void setup() {
   if (!lte.checkNetwork(60000)) {  // 60 second timeout
     LOG_E("Main", "Network registration failed!");
     LOG_E("Main", "Check: 1) SIM card inserted, 2) SIM PIN correct, 3) Network coverage");
-    while(1) delay(1000);  // Halt on error
+    LOG_E("Main", "");
+    LOG_E("Main", "NOTE: If signal strength is 99 (no signal), registration will fail.");
+    LOG_E("Main", "You may need to:");
+    LOG_E("Main", "  - Check antenna connection");
+    LOG_E("Main", "  - Move to area with better coverage");
+    LOG_E("Main", "  - Verify SIM card is activated");
+    LOG_E("Main", "");
+    LOG_W("Main", "Continuing anyway for API testing (may fail without network)...");
+    // Don't halt - allow API test to proceed (it will fail but we can see the error)
   }
   
   // Configure bearer APN

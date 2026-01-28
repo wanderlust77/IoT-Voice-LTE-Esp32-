@@ -185,26 +185,44 @@ bool LTEManager::checkNetwork(uint32_t timeout_ms) {
   }
   
   // Check signal strength first (CSQ)
+  LOG_I("LTE", "Checking signal strength...");
   String csqResponse;
   if (sendATCommandGetResponse("AT+CSQ", csqResponse, 5000)) {
-    Logger::printf(LOG_INFO, "LTE", "Signal strength: %s", csqResponse.c_str());
+    Logger::printf(LOG_INFO, "LTE", "CSQ response: %s", csqResponse.c_str());
     // Parse CSQ: +CSQ: <rssi>,<ber>
-    // rssi: 0-31 (higher is better), 99=unknown
+    // rssi: 0-31 (higher is better), 99=unknown/no signal
     int csqPos = csqResponse.indexOf("+CSQ:");
     if (csqPos >= 0) {
       int commaPos = csqResponse.indexOf(',', csqPos);
       if (commaPos > 0) {
         int rssi = csqResponse.substring(csqPos + 6, commaPos).toInt();
         if (rssi == 99) {
-          LOG_W("LTE", "Signal strength: Unknown (no signal?)");
+          LOG_E("LTE", "========================================");
+          LOG_E("LTE", "NO SIGNAL DETECTED (CSQ: 99)!");
+          LOG_E("LTE", "========================================");
+          LOG_E("LTE", "Possible causes:");
+          LOG_E("LTE", "1. No network coverage in this area");
+          LOG_E("LTE", "2. Antenna not connected properly");
+          LOG_E("LTE", "3. Wrong frequency bands for your carrier");
+          LOG_E("LTE", "4. SIM card not activated or wrong carrier");
+          LOG_E("LTE", "5. Modem hardware issue");
+          LOG_E("LTE", "========================================");
+          LOG_E("LTE", "Network registration will likely fail without signal");
+          LOG_E("LTE", "========================================");
         } else {
-          Logger::printf(LOG_INFO, "LTE", "Signal strength: %d/31 (higher is better)", rssi);
+          Logger::printf(LOG_INFO, "LTE", "Signal strength: %d/31", rssi);
           if (rssi < 10) {
-            LOG_W("LTE", "Weak signal - may affect registration");
+            LOG_W("LTE", "Weak signal (may affect registration)");
+          } else if (rssi >= 20) {
+            LOG_I("LTE", "Good signal strength");
+          } else {
+            LOG_I("LTE", "Moderate signal strength");
           }
         }
       }
     }
+  } else {
+    LOG_W("LTE", "Failed to read signal strength");
   }
   
   // Wait for network registration
@@ -302,22 +320,21 @@ bool LTEManager::checkNetwork(uint32_t timeout_ms) {
 // ============================================
 bool LTEManager::configureBearerAPN(const char* apn) {
   LOG_I("LTE", "Configuring bearer APN...");
-  
-  // Set connection type to GPRS
-  if (!sendATCommand("AT+SAPBR=3,1,\"CONTYPE\",\"GPRS\"", "OK", 5000)) {
-    LOG_E("LTE", "Failed to set connection type");
-    return false;
-  }
-  
-  // Set APN
+
+  // SIM7070E: use PDP context definition instead of SAPBR
+  // Define PDP context 1 with APN
+  //
+  // AT+CGDCONT=1,"IP","<apn>"
+  //
+  // Note: Some networks require IPv4v6 ("IPV4V6"), but "IP" is widely supported.
   char cmd[128];
-  snprintf(cmd, sizeof(cmd), "AT+SAPBR=3,1,\"APN\",\"%s\"", apn);
-  if (!sendATCommand(cmd, "OK", 5000)) {
-    LOG_E("LTE", "Failed to set APN");
+  snprintf(cmd, sizeof(cmd), "AT+CGDCONT=1,\"IP\",\"%s\"", apn);
+  if (!sendATCommand(cmd, "OK", 10000)) {
+    LOG_E("LTE", "Failed to set PDP context APN (AT+CGDCONT)");
     return false;
   }
-  
-  LOG_I("LTE", "Bearer APN configured");
+
+  LOG_I("LTE", "PDP context configured with APN");
   return true;
 }
 
@@ -326,28 +343,48 @@ bool LTEManager::configureBearerAPN(const char* apn) {
 // ============================================
 bool LTEManager::openBearer() {
   LOG_I("LTE", "Opening bearer...");
-  
-  // Check if already open
+
+  // SIM7070E: use CNACT to activate/deactivate packet data context
+  //
+  // Query current state:
+  //   AT+CNACT?
+  //   +CNACT: 0,1,"<ip>"  -> context 0 active
+  //
   String response;
-  if (sendATCommandGetResponse("AT+SAPBR=2,1", response, 5000)) {
-    if (response.indexOf("0.0.0.0") < 0) {
-      LOG_I("LTE", "Bearer already open");
-      return true;
+  if (sendATCommandGetResponse("AT+CNACT?", response, 5000)) {
+    Logger::printf(LOG_INFO, "LTE", "CNACT status: %s", response.c_str());
+
+    // If already active (0,1) and IP is not 0.0.0.0, we are done
+    int pos = response.indexOf("+CNACT:");
+    if (pos >= 0) {
+      int comma1 = response.indexOf(',', pos);
+      int comma2 = response.indexOf(',', comma1 + 1);
+      if (comma1 > 0 && comma2 > comma1) {
+        int cid = response.substring(pos + 8, comma1).toInt();
+        int state = response.substring(comma1 + 1, comma2).toInt();
+        String ip = response.substring(comma2 + 2); // skip comma and first quote
+
+        if (cid == 0 && state == 1 && ip.indexOf("0.0.0.0") < 0) {
+          LOG_I("LTE", "PDP context already active");
+          return true;
+        }
+      }
     }
   }
-  
-  // Open bearer
-  if (!sendATCommand("AT+SAPBR=1,1", "OK", 30000)) {
-    LOG_E("LTE", "Failed to open bearer");
+
+  // Activate context 0
+  //   AT+CNACT=0,1
+  if (!sendATCommand("AT+CNACT=0,1", "OK", 60000)) {
+    LOG_E("LTE", "Failed to activate PDP context (AT+CNACT=0,1)");
     return false;
   }
-  
-  // Verify bearer is open
-  if (sendATCommandGetResponse("AT+SAPBR=2,1", response, 5000)) {
-    Logger::printf(LOG_INFO, "LTE", "Bearer status: %s", response.c_str());
+
+  // Verify activation and log IP address
+  if (sendATCommandGetResponse("AT+CNACT?", response, 5000)) {
+    Logger::printf(LOG_INFO, "LTE", "CNACT status after activate: %s", response.c_str());
   }
-  
-  LOG_I("LTE", "Bearer opened");
+
+  LOG_I("LTE", "PDP context activated");
   return true;
 }
 
@@ -355,8 +392,9 @@ bool LTEManager::openBearer() {
 // CLOSE BEARER CONNECTION
 // ============================================
 bool LTEManager::closeBearer() {
-  LOG_I("LTE", "Closing bearer...");
-  sendATCommand("AT+SAPBR=0,1", "OK", 10000);
+  LOG_I("LTE", "Deactivating PDP context...");
+  // SIM7070E: deactivate context 0
+  sendATCommand("AT+CNACT=0,0", "OK", 30000);
   return true;
 }
 
@@ -690,116 +728,166 @@ bool LTEManager::httpTerminate() {
 // HTTP POST JSON WITH BEARER TOKEN AUTH
 // ============================================
 bool LTEManager::httpPostJsonWithAuth(const char* url, const char* jsonBody, const char* bearerToken, String& response) {
-  LOG_I("LTE", "HTTP POST JSON with Bearer auth...");
+  LOG_I("LTE", "HTTP POST JSON with Bearer auth (SIM7070 HTTP stack)...");
   Logger::printf(LOG_INFO, "LTE", "URL: %s", url);
   Logger::printf(LOG_INFO, "LTE", "Body: %s", jsonBody);
-  
+
   response = "";
-  
-  // Initialize HTTP
-  if (!httpInit()) {
-    LOG_E("LTE", "HTTP init failed");
-    return false;
-  }
-  
-  // Enable SSL/TLS for HTTPS
-  if (!sendATCommand("AT+HTTPSSL=1", "OK", 5000)) {
-    LOG_W("LTE", "Failed to enable SSL (may not be supported)");
-    // Continue anyway - some modems handle HTTPS automatically
-  }
-  
-  // Set URL
-  if (!httpSetParameter("URL", url)) {
-    LOG_E("LTE", "Failed to set URL");
-    httpTerminate();
-    return false;
-  }
-  
-  // Set CID
-  if (!httpSetParameter("CID", "1")) {
-    LOG_E("LTE", "Failed to set CID");
-    httpTerminate();
-    return false;
-  }
-  
-  // Set Authorization header using USERDATA parameter
-  char authHeader[256];
-  snprintf(authHeader, sizeof(authHeader), "Authorization: Bearer %s", bearerToken);
-  if (!httpSetParameter("USERDATA", authHeader)) {
-    LOG_E("LTE", "Failed to set Authorization header");
-    httpTerminate();
-    return false;
-  }
-  
-  // Set content type to JSON
-  if (!httpSetParameter("CONTENT", "application/json")) {
-    LOG_E("LTE", "Failed to set content type");
-    httpTerminate();
-    return false;
-  }
-  
-  // Upload JSON body
+
+  // SIM7070E HTTPS sequence (simplified):
+  // 1) Ensure PDP context is active (handled by openBearer()).
+  // 2) Configure HTTP stack with body/header lengths.
+  // 3) Configure basic SSL for HTTPS.
+  // 4) Add headers (Content-Type, Authorization).
+  // 5) Send body with SHBOD.
+  // 6) SHCONN, SHREQ, SHREAD, SHDISC.
+
   size_t jsonLen = strlen(jsonBody);
-  char cmd[64];
-  snprintf(cmd, sizeof(cmd), "AT+HTTPDATA=%d,10000", jsonLen);
-  
-  modemSerial->println(cmd);
-  Logger::printf(LOG_DEBUG, "LTE", "TX: %s", cmd);
-  
-  // Wait for DOWNLOAD prompt
-  if (!waitForResponse("DOWNLOAD", 5000)) {
-    LOG_E("LTE", "DOWNLOAD prompt not received");
-    httpTerminate();
-    return false;
-  }
-  
-  // Send JSON data
-  modemSerial->print(jsonBody);
-  Logger::printf(LOG_DEBUG, "LTE", "Sent JSON: %s", jsonBody);
-  
-  // Wait for OK
-  if (!waitForResponse("OK", 15000)) {
-    LOG_E("LTE", "Failed to upload JSON data");
-    httpTerminate();
-    return false;
-  }
-  
-  // Execute POST
-  int statusCode, dataLength;
-  if (!httpAction(HTTP_POST, &statusCode, &dataLength)) {
-    LOG_E("LTE", "HTTP POST action failed");
-    httpTerminate();
-    return false;
-  }
-  
-  Logger::printf(LOG_INFO, "LTE", "HTTP POST status: %d, response length: %d", statusCode, dataLength);
-  
-  // Read response
-  if (dataLength > 0) {
-    uint8_t* buffer = (uint8_t*)malloc(dataLength + 1);
-    if (buffer) {
-      size_t readLength = dataLength;
-      if (httpRead(buffer, &readLength, dataLength)) {
-        buffer[readLength] = '\0';
-        response = String((char*)buffer);
-        Logger::printf(LOG_INFO, "LTE", "Response: %s", response.c_str());
-      } else {
-        LOG_E("LTE", "Failed to read HTTP response");
-      }
-      free(buffer);
-    } else {
-      LOG_E("LTE", "Failed to allocate response buffer");
+
+  // Configure HTTP body and header lengths
+  {
+    char cmd[64];
+    snprintf(cmd, sizeof(cmd), "AT+SHCONF=\"BODYLEN\",%d", (int)jsonLen);
+    if (!sendATCommand(cmd, "OK", 5000)) {
+      LOG_E("LTE", "Failed to set BODYLEN (AT+SHCONF)");
+      return false;
+    }
+
+    // Reserve some space for headers
+    snprintf(cmd, sizeof(cmd), "AT+SHCONF=\"HEADERLEN\",350");
+    if (!sendATCommand(cmd, "OK", 5000)) {
+      LOG_E("LTE", "Failed to set HEADERLEN (AT+SHCONF)");
+      return false;
     }
   }
-  
-  // Terminate HTTP
-  httpTerminate();
-  
+
+  // Basic SSL configuration for HTTPS (use context 1)
+  // These values are standard examples from SIMCom HTTPS app notes.
+  // If any step fails, we log a warning but continue - some firmware
+  // may have reasonable defaults.
+  sendATCommand("AT+CSSLCFG=\"sslversion\",1,3", "OK", 5000);   // TLS 1.2
+  sendATCommand("AT+CSSLCFG=\"ciphersuite\",1,0XFFFF", "OK", 5000); // Default cipher set
+  sendATCommand("AT+CSSLCFG=\"seclevel\",1,0", "OK", 5000);    // No certificate validation
+  sendATCommand("AT+SHSSL=1,\"\"", "OK", 5000);                // Bind HTTP to SSL ctx 1
+
+  // Open HTTP(S) connection
+  if (!sendATCommand("AT+SHCONN", "OK", 15000)) {
+    LOG_E("LTE", "AT+SHCONN failed");
+    sendATCommand("AT+SHDISC", "OK", 5000);
+    return false;
+  }
+
+  // Add required headers
+  {
+    char cmd[256];
+    // Content-Type: application/json
+    snprintf(cmd, sizeof(cmd), "AT+SHAHEAD=\"Content-Type\",\"application/json\"");
+    if (!sendATCommand(cmd, "OK", 5000)) {
+      LOG_E("LTE", "Failed to add Content-Type header");
+      sendATCommand("AT+SHDISC", "OK", 5000);
+      return false;
+    }
+
+    // Authorization: Bearer <token>
+    snprintf(cmd, sizeof(cmd), "AT+SHAHEAD=\"Authorization\",\"Bearer %s\"", bearerToken);
+    if (!sendATCommand(cmd, "OK", 5000)) {
+      LOG_E("LTE", "Failed to add Authorization header");
+      sendATCommand("AT+SHDISC", "OK", 5000);
+      return false;
+    }
+  }
+
+  // Send JSON body
+  {
+    char cmd[64];
+    snprintf(cmd, sizeof(cmd), "AT+SHBOD=%d,10000", (int)jsonLen);
+    modemSerial->println(cmd);
+    Logger::printf(LOG_DEBUG, "LTE", "TX: %s", cmd);
+
+    // Wait for "DOWNLOAD" prompt
+    if (!waitForResponse("DOWNLOAD", 5000)) {
+      LOG_E("LTE", "DOWNLOAD prompt not received for SHBOD");
+      sendATCommand("AT+SHDISC", "OK", 5000);
+      return false;
+    }
+
+    // Send body
+    modemSerial->print(jsonBody);
+    Logger::printf(LOG_DEBUG, "LTE", "Sent JSON: %s", jsonBody);
+
+    // Wait for OK
+    if (!waitForResponse("OK", 15000)) {
+      LOG_E("LTE", "JSON upload failed (no OK after SHBOD)");
+      sendATCommand("AT+SHDISC", "OK", 5000);
+      return false;
+    }
+  }
+
+  // Issue HTTP POST request:
+  //   AT+SHREQ="<url>",3   (3 = POST)
+  {
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "AT+SHREQ=\"%s\",3", url);
+    modemSerial->println(cmd);
+    Logger::printf(LOG_DEBUG, "LTE", "TX: %s", cmd);
+  }
+
+  // Wait for SHREQ result:
+  //   +SHREQ: "<url>",<status>,<datalen>
+  int statusCode = -1;
+  int dataLength = 0;
+  {
+    String shreqResp = readSerial(60000);
+    Logger::printf(LOG_DEBUG, "LTE", "SHREQ RX: %s", shreqResp.c_str());
+
+    int pos = shreqResp.indexOf("+SHREQ:");
+    if (pos >= 0) {
+      // crude parse: +SHREQ: "<url>",<status>,<len>
+      int firstComma = shreqResp.indexOf(',', pos);
+      int secondComma = shreqResp.indexOf(',', firstComma + 1);
+      if (firstComma > 0 && secondComma > firstComma) {
+        statusCode = shreqResp.substring(firstComma + 1, secondComma).toInt();
+        dataLength = shreqResp.substring(secondComma + 1).toInt();
+      }
+    }
+  }
+
+  Logger::printf(LOG_INFO, "LTE", "HTTP POST status: %d, response length: %d", statusCode, dataLength);
+
+  // Read response body if any
+  if (dataLength > 0) {
+    // Read all data in one go (0,start from beginning)
+    char cmd[64];
+    snprintf(cmd, sizeof(cmd), "AT+SHREAD=0,%d", dataLength);
+    modemSerial->println(cmd);
+    LOG_D("LTE", "TX: AT+SHREAD");
+
+    String readResp = readSerial(30000);
+    Logger::printf(LOG_DEBUG, "LTE", "SHREAD RX: %s", readResp.c_str());
+
+    // Response format:
+    //   +SHREAD: <len>
+    //   <data...>
+    int hdrPos = readResp.indexOf("+SHREAD:");
+    if (hdrPos >= 0) {
+      int nlPos = readResp.indexOf('\n', hdrPos);
+      if (nlPos > 0 && (size_t)(nlPos + 1) < readResp.length()) {
+        response = readResp.substring(nlPos + 1);
+        Logger::printf(LOG_INFO, "LTE", "Response body: %s", response.c_str());
+      }
+    } else {
+      LOG_W("LTE", "SHREAD header not found; raw response logged above");
+    }
+  }
+
+  // Disconnect HTTP session
+  sendATCommand("AT+SHDISC", "OK", 10000);
+
   if (statusCode >= 200 && statusCode < 300) {
     LOG_I("LTE", "HTTP POST JSON successful");
     return true;
   }
-  
+
   Logger::printf(LOG_ERROR, "LTE", "HTTP POST failed with status %d", statusCode);
   return false;
 }
