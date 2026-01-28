@@ -187,13 +187,29 @@ bool LTEManager::configureBearerAPN(const char* apn) {
   LOG_I("LTE", "Configuring APN...");
   Logger::printf(LOG_INFO, "LTE", "APN: %s", apn);
   
+  // Wait a bit after network registration
+  delay(1000);
+  
+  // Check modem responsiveness first
+  if (!sendATCommand("AT", "OK", 2000)) {
+    LOG_E("LTE", "Modem not responding before APN config");
+    return false;
+  }
+  
   // SIM7070E uses AT+CGDCONT instead of SAPBR
   // Format: AT+CGDCONT=<cid>,"<PDP_type>","<APN>"
   char cmd[128];
   snprintf(cmd, sizeof(cmd), "AT+CGDCONT=1,\"IP\",\"%s\"", apn);
   
-  if (!sendATCommand(cmd, "OK", 5000)) {
+  if (!sendATCommand(cmd, "OK", 10000)) {  // Increased timeout
     LOG_E("LTE", "Failed to configure APN!");
+    
+    // Try reading current CGDCONT settings for debugging
+    String response;
+    if (sendATCommandGetResponse("AT+CGDCONT?", response, 5000)) {
+      Logger::printf(LOG_INFO, "LTE", "Current CGDCONT: %s", response.c_str());
+    }
+    
     return false;
   }
   
