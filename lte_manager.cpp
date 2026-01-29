@@ -277,7 +277,7 @@ bool LTEManager::configureBearerAPN(const char* apn) {
   }
   
   if (!responsive) {
-    LOG_E("LTE", "Modem not responding before APN config (after %d attempts)", maxAttempts);
+    Logger::printf(LOG_ERROR, "LTE", "Modem not responding before APN config (after %d attempts)", maxAttempts);
     return false;
   }
   
