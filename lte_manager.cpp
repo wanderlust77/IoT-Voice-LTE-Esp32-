@@ -187,11 +187,14 @@ bool LTEManager::configureBearerAPN(const char* apn) {
   LOG_I("LTE", "Configuring APN...");
   Logger::printf(LOG_INFO, "LTE", "APN: %s", apn);
   
-  // Wait a bit after network registration
-  delay(1000);
+  // Modem can go busy after CREG; drain RX and wait for it to settle (up to 5s)
+  clearSerialBuffer();
+  delay(3000);
+  clearSerialBuffer();
+  delay(2000);
   
-  // Check modem responsiveness first
-  if (!sendATCommand("AT", "OK", 2000)) {
+  // Check modem responsiveness
+  if (!sendATCommand("AT", "OK", 3000)) {
     LOG_E("LTE", "Modem not responding before APN config");
     return false;
   }
@@ -201,15 +204,12 @@ bool LTEManager::configureBearerAPN(const char* apn) {
   char cmd[128];
   snprintf(cmd, sizeof(cmd), "AT+CGDCONT=1,\"IP\",\"%s\"", apn);
   
-  if (!sendATCommand(cmd, "OK", 10000)) {  // Increased timeout
+  if (!sendATCommand(cmd, "OK", 10000)) {
     LOG_E("LTE", "Failed to configure APN!");
-    
-    // Try reading current CGDCONT settings for debugging
     String response;
     if (sendATCommandGetResponse("AT+CGDCONT?", response, 5000)) {
       Logger::printf(LOG_INFO, "LTE", "Current CGDCONT: %s", response.c_str());
     }
-    
     return false;
   }
   
