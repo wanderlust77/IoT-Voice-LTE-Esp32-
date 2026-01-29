@@ -19,20 +19,27 @@ bool LTEManager::init(uint8_t txPin, uint8_t rxPin, uint8_t pwrkeyPin, uint8_t r
   
   LOG_I("LTE", "Initializing LTE modem...");
   
-  // Configure control pins
+  // Configure control pins (MIKROE-6287: PWRKEY and RESET are active LOW)
   pinMode(pinPwrkey, OUTPUT);
   pinMode(pinReset, OUTPUT);
-  digitalWrite(pinPwrkey, HIGH);  // PWRKEY is active LOW
-  digitalWrite(pinReset, HIGH);   // RESET is active LOW
+  digitalWrite(pinPwrkey, HIGH);  // inactive - do not press PWRKEY
+  digitalWrite(pinReset, HIGH);   // inactive - do not reset
   
-  // Initialize UART (Serial2 on ESP32)
+  // Initialize UART (Serial2): ESP32 RX=rxPin, TX=txPin -> modem TX,RX
   modemSerial = &Serial2;
   modemSerial->begin(baudRate, SERIAL_8N1, rxPin, txPin);
   
-  // Log UART configuration
-  Logger::printf(LOG_INFO, "LTE", "UART: RX=GPIO%d, TX=GPIO%d, Baud=%d", rxPin, txPin, baudRate);
+  Logger::printf(LOG_INFO, "LTE", "UART: RX=GPIO%d, TX=GPIO%d, Baud=%lu", rxPin, txPin, (unsigned long)baudRate);
   
-  // Clear any pending data
+  // Let UART and modem settle
+  delay(300);
+  clearSerialBuffer();
+  
+  // Hardware reset: pulse RESET LOW then HIGH for clean state (optional, helps if modem was hung)
+  digitalWrite(pinReset, LOW);
+  delay(200);
+  digitalWrite(pinReset, HIGH);
+  delay(500);
   clearSerialBuffer();
   
   initialized = true;
@@ -57,7 +64,8 @@ bool LTEManager::powerOn() {
   for (int i = 0; i < 5; i++) {
     modemSerial->println("AT");
     Logger::printf(LOG_DEBUG, "LTE", "TX: AT (check %d/5)", i + 1);
-    String resp = readSerial(2000);
+    unsigned long atTimeout = (i < 2) ? 3500 : 2000;  // Longer for first checks (after reset)
+    String resp = readSerial(atTimeout);
     Logger::printf(LOG_DEBUG, "LTE", "RX: %s", resp.c_str());
     
     if (resp.indexOf("OK") >= 0) {
@@ -82,10 +90,14 @@ bool LTEManager::powerOn() {
     delay(500);
   }
   
-  // No OK and no boot messages - modem may really be off
-  LOG_I("LTE", "Modem off, powering on...");
+  // No OK and no boot messages - modem is off or hung
+  LOG_I("LTE", "Modem off or hung - power cycling...");
   
-  // Pulse PWRKEY low for 1.5 seconds (SIM7070: LOW pulse to turn ON)
+  // Full power cycle: 1) Turn off (PWRKEY LOW 1.5s), 2) Wait, 3) Turn on (PWRKEY LOW 1.5s)
+  digitalWrite(pinPwrkey, LOW);
+  delay(1500);
+  digitalWrite(pinPwrkey, HIGH);
+  delay(2000);
   digitalWrite(pinPwrkey, LOW);
   delay(1500);
   digitalWrite(pinPwrkey, HIGH);
