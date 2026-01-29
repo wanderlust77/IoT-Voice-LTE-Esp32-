@@ -245,16 +245,26 @@ bool LTEManager::configureBearerAPN(const char* apn) {
   LOG_I("LTE", "Configuring APN...");
   Logger::printf(LOG_INFO, "LTE", "APN: %s", apn);
   
-  // Modem can go busy after CREG; drain RX and wait for it to settle (up to 5s)
+  // Brief settle and drain any unsolicited (e.g. SMS Ready)
   clearSerialBuffer();
-  delay(3000);
-  clearSerialBuffer();
-  delay(2000);
+  delay(500);
   
-  // Check modem responsiveness
-  if (!sendATCommand("AT", "OK", 3000)) {
+  // Check modem responsiveness; accept OK or unsolicited (SMS Ready, READY, +CFUN)
+  modemSerial->println("AT");
+  String atResp = readSerial(3000);
+  bool responsive = (atResp.indexOf("OK") >= 0) ||
+                    (atResp.indexOf("SMS Ready") >= 0) ||
+                    (atResp.indexOf("READY") >= 0) ||
+                    (atResp.indexOf("+CFUN") >= 0);
+  if (!responsive) {
     LOG_E("LTE", "Modem not responding before APN config");
     return false;
+  }
+  if (atResp.indexOf("OK") < 0) {
+    LOG_I("LTE", "Modem sent unsolicited - sending AT again");
+    clearSerialBuffer();
+    modemSerial->println("AT");
+    readSerial(3000);  // drain
   }
   
   // SIM7070E uses AT+CGDCONT instead of SAPBR
