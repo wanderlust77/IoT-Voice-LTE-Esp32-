@@ -64,7 +64,9 @@ void setup() {
 #else
   // Skip CPIN?/CREG? - modem stays responsive; go straight to APN/bearer
   LOG_I("Main", "Skipping network check (LTE_SKIP_NETWORK_CHECK=1)...");
-  delay(1500);  // Brief settle after powerOn
+  // SIM7070E: RF/SIM still initializing after first AT OK; wait before APN/CGDCONT
+  LOG_I("Main", "Post-boot settle 8s (SIM7070E RF/SIM init)...");
+  delay(8000);
 #endif
   
   // Configure bearer APN

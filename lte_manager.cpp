@@ -245,30 +245,43 @@ bool LTEManager::configureBearerAPN(const char* apn) {
   LOG_I("LTE", "Configuring APN...");
   Logger::printf(LOG_INFO, "LTE", "APN: %s", apn);
   
-  // Brief settle and drain any unsolicited (e.g. SMS Ready)
+  // SIM7070E can be busy with RF/SIM init after boot; single AT often gets
+  // unsolicited (SMS Ready, READY) or no reply. Retry AT up to 5 times with
+  // delays so we only send CGDCONT when modem is ready.
   clearSerialBuffer();
-  delay(500);
+  bool responsive = false;
+  const int maxAttempts = 5;
+  const unsigned long atTimeout = 3000;
+  const unsigned long betweenAttempts = 2000;
   
-  // Check modem responsiveness; accept OK or unsolicited (SMS Ready, READY, +CFUN)
-  modemSerial->println("AT");
-  String atResp = readSerial(3000);
-  bool responsive = (atResp.indexOf("OK") >= 0) ||
-                    (atResp.indexOf("SMS Ready") >= 0) ||
-                    (atResp.indexOf("READY") >= 0) ||
-                    (atResp.indexOf("+CFUN") >= 0);
+  for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (attempt > 1) {
+      delay(betweenAttempts);
+      clearSerialBuffer();
+    }
+    modemSerial->println("AT");
+    Logger::printf(LOG_DEBUG, "LTE", "AT responsiveness check %d/%d", attempt, maxAttempts);
+    String atResp = readSerial(atTimeout);
+    
+    // Success = explicit OK or any unsolicited (modem is alive; don't false-fail)
+    if (atResp.indexOf("OK") >= 0) {
+      responsive = true;
+      LOG_I("LTE", "Modem responsive (OK)");
+      break;
+    }
+    if (atResp.indexOf("SMS Ready") >= 0 || atResp.indexOf("READY") >= 0 || atResp.indexOf("+CFUN") >= 0) {
+      responsive = true;
+      Logger::printf(LOG_INFO, "LTE", "Modem responsive (unsolicited), attempt %d", attempt);
+      break;
+    }
+  }
+  
   if (!responsive) {
-    LOG_E("LTE", "Modem not responding before APN config");
+    LOG_E("LTE", "Modem not responding before APN config (after %d attempts)", maxAttempts);
     return false;
   }
-  if (atResp.indexOf("OK") < 0) {
-    LOG_I("LTE", "Modem sent unsolicited - sending AT again");
-    clearSerialBuffer();
-    modemSerial->println("AT");
-    readSerial(3000);  // drain
-  }
   
-  // SIM7070E uses AT+CGDCONT instead of SAPBR
-  // Format: AT+CGDCONT=<cid>,"<PDP_type>","<APN>"
+  // SIM7070E uses AT+CGDCONT (not SAPBR)
   char cmd[128];
   snprintf(cmd, sizeof(cmd), "AT+CGDCONT=1,\"IP\",\"%s\"", apn);
   
