@@ -186,11 +186,27 @@ bool LTEManager::checkNetwork(uint32_t timeout_ms) {
     return false;
   }
   
+  // Modem can go busy briefly after CPIN; drain RX and wait before CREG
+  delay(2000);
+  clearSerialBuffer();
+  delay(1000);
+  
+  // Sanity check: modem still responsive
+  if (!sendATCommand("AT", "OK", 3000)) {
+    LOG_W("LTE", "Modem not responding after CPIN - retrying AT...");
+    delay(2000);
+    clearSerialBuffer();
+    if (!sendATCommand("AT", "OK", 5000)) {
+      LOG_E("LTE", "Modem unresponsive after CPIN check");
+      return false;
+    }
+  }
+  
   // Wait for network registration
   unsigned long startTime = millis();
   while (millis() - startTime < timeout_ms) {
     String response;
-    if (sendATCommandGetResponse("AT+CREG?", response, 5000)) {
+    if (sendATCommandGetResponse("AT+CREG?", response, 8000)) {
       // Look for +CREG: 0,1 (registered) or +CREG: 0,5 (roaming)
       if (response.indexOf("+CREG: 0,1") >= 0 || response.indexOf("+CREG: 0,5") >= 0) {
         LOG_I("LTE", "Network registered");
