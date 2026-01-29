@@ -239,15 +239,59 @@ bool LTEManager::checkNetwork(uint32_t timeout_ms) {
 }
 
 // ============================================
+// WAIT FOR MODEM READY (RF + SIM)
+// ============================================
+// SIM7070E accepts AT OK before RF/SIM stack is ready; CGDCONT will be dropped
+// until +CFUN:1 (RF on) and +CPIN: READY (SIM ready). Poll until both are true.
+bool LTEManager::waitForModemReady(uint32_t timeout_ms) {
+  LOG_I("LTE", "Waiting for modem RF/SIM readiness...");
+  unsigned long start = millis();
+  const unsigned long pollInterval = 2000;
+  const unsigned long readTimeout = 4000;
+  int pollCount = 0;
+  
+  while (millis() - start < timeout_ms) {
+    pollCount++;
+    clearSerialBuffer();
+    
+    // CFUN=1 means RF is on and modem is ready for network commands
+    modemSerial->println("AT+CFUN?");
+    Logger::printf(LOG_DEBUG, "LTE", "TX: AT+CFUN? (poll %d)", pollCount);
+    String cfunResp = readSerial(readTimeout);
+    if (cfunResp.indexOf("+CFUN: 1") >= 0 || cfunResp.indexOf("+CFUN:1") >= 0) {
+      LOG_I("LTE", "RF ready (+CFUN: 1)");
+      
+      clearSerialBuffer();
+      modemSerial->println("AT+CPIN?");
+      String cpinResp = readSerial(readTimeout);
+      if (cpinResp.indexOf("+CPIN: READY") >= 0 || cpinResp.indexOf("READY") >= 0) {
+        LOG_I("LTE", "SIM ready (+CPIN: READY)");
+        LOG_I("LTE", "Modem RF/SIM ready");
+        return true;
+      }
+    }
+    
+    delay(pollInterval);
+  }
+  
+  Logger::printf(LOG_ERROR, "LTE", "Modem RF/SIM not ready within %lu ms", timeout_ms);
+  return false;
+}
+
+// ============================================
 // CONFIGURE BEARER APN
 // ============================================
 bool LTEManager::configureBearerAPN(const char* apn) {
   LOG_I("LTE", "Configuring APN...");
   Logger::printf(LOG_INFO, "LTE", "APN: %s", apn);
   
-  // SIM7070E can be busy with RF/SIM init after boot; single AT often gets
-  // unsolicited (SMS Ready, READY) or no reply. Retry AT up to 5 times with
-  // delays so we only send CGDCONT when modem is ready.
+  // Gate: ensure RF/SIM ready before any APN config (SIM7070E drops CGDCONT otherwise)
+  if (!waitForModemReady(30000)) {
+    LOG_E("LTE", "Aborting APN config: modem not ready");
+    return false;
+  }
+  
+  // SIM7070E can still drop commands if UART is busy; keep retry for AT responsiveness
   clearSerialBuffer();
   bool responsive = false;
   const int maxAttempts = 5;
