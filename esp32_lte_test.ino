@@ -52,23 +52,21 @@ void setup() {
     while(1) delay(1000);  // Halt on error
   }
   
-  // Check network registration
+#if !defined(LTE_SKIP_NETWORK_CHECK) || (LTE_SKIP_NETWORK_CHECK == 0)
+  // Check network registration (CPIN?/CREG?)
   LOG_I("Main", "Checking network registration...");
-  if (!lte.checkNetwork(60000)) {  // 60 second timeout
+  if (!lte.checkNetwork(60000)) {
     LOG_E("Main", "Network registration failed!");
     LOG_E("Main", "Check: 1) SIM card inserted, 2) SIM PIN correct, 3) Network coverage");
     LOG_E("Main", "");
-    LOG_E("Main", "NOTE: If signal strength is 99 (no signal), registration will fail.");
-    LOG_E("Main", "You may need to:");
-    LOG_E("Main", "  - Check antenna connection");
-    LOG_E("Main", "  - Move to area with better coverage");
-    LOG_E("Main", "  - Verify SIM card is activated");
-    LOG_E("Main", "");
     LOG_W("Main", "Continuing anyway for API testing (may fail without network)...");
-    // Don't halt - allow API test to proceed (it will fail but we can see the error)
   }
+#else
+  // Skip CPIN?/CREG? - modem can enter bad state when CPIN? returns ERROR
+  LOG_I("Main", "Skipping network check (LTE_SKIP_NETWORK_CHECK=1)...");
+#endif
   
-  // SIM7070E can be busy after CREG?; wait before APN/CGDCONT
+  // SIM7070E can be busy; wait before APN/CGDCONT
   LOG_I("Main", "Settling 6s before APN config...");
   delay(6000);
   

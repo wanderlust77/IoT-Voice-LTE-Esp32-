@@ -27,6 +27,7 @@
 #define LTE_BAUD_RATE         115200
 #define LTE_APN               "internet.ht.ht"          // HT Mobile (Croatia) APN
 #define LTE_PIN               "5576"                   // SIM PIN (optional, set to "" if no PIN)
+#define LTE_SKIP_NETWORK_CHECK  1  // 1=skip CPIN?/CREG? (avoids modem bad state when CPIN? returns ERROR)
 #define API_BASE_URL          "https://rmhfhawfcyutzdtwsfnj.supabase.co/functions/v1"
 #define DEVICE_TOKEN          "device_b6525ecf-f009-4068-baa1-c26f5057e6ae"
 // SIM Info (for reference):

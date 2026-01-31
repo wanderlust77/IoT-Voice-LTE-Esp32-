@@ -151,6 +151,9 @@ bool LTEManager::checkNetwork(uint32_t timeout_ms) {
     }
   } else if (pinResponse.indexOf("+CPIN: READY") >= 0) {
     LOG_I("LTE", "SIM ready (no PIN required)");
+  } else if (pinResponse.indexOf("ERROR") >= 0) {
+    LOG_W("LTE", "AT+CPIN? returned ERROR - SIM may be absent or modem not ready; continuing to CREG");
+    // Do not return - try CREG anyway; modem may still register
   } else {
     Logger::printf(LOG_ERROR, "LTE", "Unexpected SIM status: %s", pinResponse.c_str());
     return false;
@@ -196,10 +199,10 @@ bool LTEManager::checkNetwork(uint32_t timeout_ms) {
 // ============================================
 // WAIT FOR MODEM READY (RF + SIM)
 // ============================================
-// SIM7070E can answer AT but drop CGDCONT until +CFUN:1 and +CPIN: READY.
-// Poll until both are true so APN config is not dropped.
+// SIM7070E can answer AT but drop CGDCONT until +CFUN:1. Poll until CFUN:1.
+// CPIN READY is optional - if CPIN? returns ERROR we still proceed when CFUN:1.
 bool LTEManager::waitForModemReady(uint32_t timeout_ms) {
-  LOG_I("LTE", "Waiting for modem RF/SIM readiness...");
+  LOG_I("LTE", "Waiting for modem RF readiness (+CFUN: 1)...");
   unsigned long start = millis();
   const unsigned long pollInterval = 2000;
   const unsigned long readTimeout = 5000;
@@ -214,19 +217,13 @@ bool LTEManager::waitForModemReady(uint32_t timeout_ms) {
     String cfunResp = readSerial(readTimeout);
     if (cfunResp.indexOf("+CFUN: 1") >= 0 || cfunResp.indexOf("+CFUN:1") >= 0) {
       LOG_I("LTE", "RF ready (+CFUN: 1)");
-      clearSerialBuffer();
-      modemSerial->println("AT+CPIN?");
-      String cpinResp = readSerial(readTimeout);
-      if (cpinResp.indexOf("+CPIN: READY") >= 0 || cpinResp.indexOf("READY") >= 0) {
-        LOG_I("LTE", "SIM ready (+CPIN: READY)");
-        LOG_I("LTE", "Modem RF/SIM ready");
-        return true;
-      }
+      LOG_I("LTE", "Modem ready for APN config");
+      return true;
     }
     delay(pollInterval);
   }
   
-  Logger::printf(LOG_ERROR, "LTE", "Modem RF/SIM not ready within %lu ms", timeout_ms);
+  Logger::printf(LOG_ERROR, "LTE", "Modem RF not ready (+CFUN: 1) within %lu ms", timeout_ms);
   return false;
 }
 
