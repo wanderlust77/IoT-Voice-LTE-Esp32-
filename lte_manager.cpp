@@ -240,27 +240,36 @@ bool LTEManager::configureBearerAPN(const char* apn) {
     return false;
   }
   
-  // Modem is ready (CFUN:1); drain RX and proceed directly to CGDCONT
-  // Sending more AT after CFUN? can make modem unresponsive - skip AT retry
+  // Modem is ready (CFUN:1); drain RX, wait longer, then send CGDCONT
+  // SIM7070E can stay busy briefly after CFUN? - give it 5s before CGDCONT
   clearSerialBuffer();
-  delay(2000);
+  delay(5000);
   
   // SIM7070E uses AT+CGDCONT (not SAPBR)
   // Format: AT+CGDCONT=<cid>,"<PDP_type>","<APN>"
   char cmd[128];
   snprintf(cmd, sizeof(cmd), "AT+CGDCONT=1,\"IP\",\"%s\"", apn);
   
-  if (!sendATCommand(cmd, "OK", 10000)) {
-    LOG_E("LTE", "Failed to configure APN!");
-    String response;
-    if (sendATCommandGetResponse("AT+CGDCONT?", response, 5000)) {
-      Logger::printf(LOG_INFO, "LTE", "Current CGDCONT: %s", response.c_str());
+  const int maxAttempts = 3;
+  const uint32_t cgdcontTimeout = 15000;
+  for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (attempt > 1) {
+      LOG_I("LTE", "CGDCONT retry %d/%d...", attempt, maxAttempts);
+      clearSerialBuffer();
+      delay(3000);
     }
-    return false;
+    if (sendATCommand(cmd, "OK", cgdcontTimeout)) {
+      LOG_I("LTE", "APN configured");
+      return true;
+    }
   }
   
-  LOG_I("LTE", "APN configured");
-  return true;
+  LOG_E("LTE", "Failed to configure APN after %d attempts!", maxAttempts);
+  String response;
+  if (sendATCommandGetResponse("AT+CGDCONT?", response, 5000)) {
+    Logger::printf(LOG_INFO, "LTE", "Current CGDCONT: %s", response.c_str());
+  }
+  return false;
 }
 
 // ============================================
@@ -510,6 +519,16 @@ String LTEManager::readSerial(uint32_t timeout_ms) {
   // Debug: show if we received any bytes at all
   if (bytesReceived > 0) {
     Logger::printf(LOG_DEBUG, "LTE", "Received %d bytes", bytesReceived);
+    // Log hex when response is very short (helps debug single-byte / partial responses)
+    if (bytesReceived <= 8 && result.length() > 0) {
+      String hexStr;
+      for (size_t i = 0; i < result.length(); i++) {
+        char buf[4];
+        snprintf(buf, sizeof(buf), "%02X ", (unsigned char)result[i]);
+        hexStr += buf;
+      }
+      Logger::printf(LOG_DEBUG, "LTE", "RX hex: %s", hexStr.c_str());
+    }
   } else {
     Logger::printf(LOG_DEBUG, "LTE", "No data received (timeout %dms)", timeout_ms);
   }
