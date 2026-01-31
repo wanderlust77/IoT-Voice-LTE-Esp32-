@@ -32,7 +32,9 @@ bool LTEManager::init(uint8_t txPin, uint8_t rxPin, uint8_t pwrkeyPin, uint8_t r
   // Log UART configuration
   Logger::printf(LOG_INFO, "LTE", "UART: RX=GPIO%d, TX=GPIO%d, Baud=%d", rxPin, txPin, baudRate);
   
-  // Clear any pending data
+  // Drain any boot/leftover data: clear, wait for in-flight bytes, clear again
+  clearSerialBuffer();
+  delay(300);
   clearSerialBuffer();
   
   initialized = true;
@@ -52,8 +54,11 @@ bool LTEManager::powerOn() {
   
   LOG_I("LTE", "Checking if modem is already on...");
   
-  // First, check if modem is already powered on
+  // Drain leftover/boot data so first AT gets a clean response (not garbage 0x00/0x04)
   clearSerialBuffer();
+  delay(500);
+  clearSerialBuffer();
+  
   for (int i = 0; i < 3; i++) {
     if (sendATCommand("AT", "OK", 1000)) {
       powered = true;
@@ -240,10 +245,13 @@ bool LTEManager::configureBearerAPN(const char* apn) {
     return false;
   }
   
-  // Modem is ready (CFUN:1); drain RX, wait longer, then send CGDCONT
-  // Skip ATE0: modem often gives no response here and can go silent for next command
+  // Modem is ready (CFUN:1); drain RX fully, wait, then send CGDCONT
   clearSerialBuffer();
   delay(5000);
+  // Final drain so no trailing bytes from CFUN? or delay are attributed to CGDCONT
+  clearSerialBuffer();
+  delay(500);
+  clearSerialBuffer();
   
   // SIM7070: CID 0 is the first PDP context (matches CNACT pdpidx 0). Try cid=0 then cid=1.
   const int maxAttempts = 3;
