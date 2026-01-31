@@ -241,26 +241,34 @@ bool LTEManager::configureBearerAPN(const char* apn) {
   }
   
   // Modem is ready (CFUN:1); drain RX, wait longer, then send CGDCONT
-  // SIM7070E can stay busy briefly after CFUN? - give it 5s before CGDCONT
   clearSerialBuffer();
   delay(5000);
   
-  // SIM7070E uses AT+CGDCONT (not SAPBR)
-  // Format: AT+CGDCONT=<cid>,"<PDP_type>","<APN>"
-  char cmd[128];
-  snprintf(cmd, sizeof(cmd), "AT+CGDCONT=1,\"IP\",\"%s\"", apn);
+  // SIM7070: CID 0 is the first PDP context (matches CNACT pdpidx 0). Try cid=0 then cid=1.
+  // Send ATE0 so response is only result line (no echo) and we don't misread garbage.
+  if (!sendATCommand("ATE0", "OK", 3000)) {
+    LOG_I("LTE", "ATE0 failed (continuing anyway)");
+  }
+  delay(500);
   
   const int maxAttempts = 3;
-  const uint32_t cgdcontTimeout = 15000;
-  for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-    if (attempt > 1) {
-      Logger::printf(LOG_INFO, "LTE", "CGDCONT retry %d/%d...", attempt, maxAttempts);
-      clearSerialBuffer();
-      delay(3000);
-    }
-    if (sendATCommand(cmd, "OK", cgdcontTimeout)) {
-      LOG_I("LTE", "APN configured");
-      return true;
+  const uint32_t cgdcontTimeout = 20000;
+  const int cidsToTry[] = { 0, 1 };
+  for (int cidIdx = 0; cidIdx < 2; cidIdx++) {
+    int cid = cidsToTry[cidIdx];
+    char cmd[128];
+    snprintf(cmd, sizeof(cmd), "AT+CGDCONT=%d,\"IP\",\"%s\"", cid, apn);
+    Logger::printf(LOG_INFO, "LTE", "Trying CGDCONT cid=%d...", cid);
+    for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (attempt > 1) {
+        Logger::printf(LOG_INFO, "LTE", "CGDCONT retry %d/%d (cid=%d)...", attempt, maxAttempts, cid);
+        clearSerialBuffer();
+        delay(3000);
+      }
+      if (sendATCommand(cmd, "OK", cgdcontTimeout)) {
+        LOG_I("LTE", "APN configured");
+        return true;
+      }
     }
   }
   
@@ -505,10 +513,18 @@ String LTEManager::readSerial(uint32_t timeout_ms) {
   String result = "";
   unsigned long startTime = millis();
   int bytesReceived = 0;
+  bool hadNonNull = false;
   
   while (millis() - startTime < timeout_ms) {
     while (modemSerial->available()) {
       char c = modemSerial->read();
+      // Ignore leading null bytes (noise / modem busy); keep waiting for real response
+      if (c == 0 && !hadNonNull) {
+        bytesReceived++;
+        startTime = millis();
+        continue;
+      }
+      hadNonNull = true;
       result += c;
       bytesReceived++;
       startTime = millis();  // Reset timeout on data received
@@ -528,6 +544,8 @@ String LTEManager::readSerial(uint32_t timeout_ms) {
         hexStr += buf;
       }
       Logger::printf(LOG_DEBUG, "LTE", "RX hex: %s", hexStr.c_str());
+    } else if (bytesReceived > 0 && result.length() == 0) {
+      Logger::printf(LOG_DEBUG, "LTE", "RX hex: (all null bytes)");
     }
   } else {
     Logger::printf(LOG_DEBUG, "LTE", "No data received (timeout %dms)", timeout_ms);
