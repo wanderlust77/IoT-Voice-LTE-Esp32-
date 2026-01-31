@@ -164,6 +164,19 @@ bool LTEManager::checkNetwork(uint32_t timeout_ms) {
       // Look for +CREG: 0,1 (registered) or +CREG: 0,5 (roaming)
       if (response.indexOf("+CREG: 0,1") >= 0 || response.indexOf("+CREG: 0,5") >= 0) {
         LOG_I("LTE", "Network registered");
+        // Signal strength check: +CSQ: rssi,ber (rssi 0-31 = signal, 99 = no signal)
+        String csqResp;
+        if (sendATCommandGetResponse("AT+CSQ", csqResp, 5000)) {
+          int rssi = -1, ber = -1;
+          int pos = csqResp.indexOf("+CSQ:");
+          if (pos >= 0 && sscanf(csqResp.c_str() + pos, "+CSQ: %d,%d", &rssi, &ber) >= 1) {
+            if (rssi == 99) {
+              LOG_W("LTE", "Signal: no signal (CSQ 99)");
+            } else if (rssi >= 0 && rssi <= 31) {
+              Logger::printf(LOG_INFO, "LTE", "Signal: CSQ %d (0=weak, 31=strong)", rssi);
+            }
+          }
+        }
         return true;
       }
       
@@ -181,19 +194,61 @@ bool LTEManager::checkNetwork(uint32_t timeout_ms) {
 }
 
 // ============================================
+// WAIT FOR MODEM READY (RF + SIM)
+// ============================================
+// SIM7070E can answer AT but drop CGDCONT until +CFUN:1 and +CPIN: READY.
+// Poll until both are true so APN config is not dropped.
+bool LTEManager::waitForModemReady(uint32_t timeout_ms) {
+  LOG_I("LTE", "Waiting for modem RF/SIM readiness...");
+  unsigned long start = millis();
+  const unsigned long pollInterval = 2000;
+  const unsigned long readTimeout = 5000;
+  int pollCount = 0;
+  
+  while (millis() - start < timeout_ms) {
+    pollCount++;
+    clearSerialBuffer();
+    
+    modemSerial->println("AT+CFUN?");
+    Logger::printf(LOG_DEBUG, "LTE", "TX: AT+CFUN? (poll %d)", pollCount);
+    String cfunResp = readSerial(readTimeout);
+    if (cfunResp.indexOf("+CFUN: 1") >= 0 || cfunResp.indexOf("+CFUN:1") >= 0) {
+      LOG_I("LTE", "RF ready (+CFUN: 1)");
+      clearSerialBuffer();
+      modemSerial->println("AT+CPIN?");
+      String cpinResp = readSerial(readTimeout);
+      if (cpinResp.indexOf("+CPIN: READY") >= 0 || cpinResp.indexOf("READY") >= 0) {
+        LOG_I("LTE", "SIM ready (+CPIN: READY)");
+        LOG_I("LTE", "Modem RF/SIM ready");
+        return true;
+      }
+    }
+    delay(pollInterval);
+  }
+  
+  Logger::printf(LOG_ERROR, "LTE", "Modem RF/SIM not ready within %lu ms", timeout_ms);
+  return false;
+}
+
+// ============================================
 // CONFIGURE BEARER APN
 // ============================================
 bool LTEManager::configureBearerAPN(const char* apn) {
   LOG_I("LTE", "Configuring APN...");
   Logger::printf(LOG_INFO, "LTE", "APN: %s", apn);
   
-  // SIM7070E often busy after CREG?; single AT can get 1 byte or nothing. Retry AT
-  // up to 5 times; accept OK or unsolicited (SMS Ready, READY, +CFUN) as responsive.
+  // Gate: wait until RF/SIM ready so SIM7070E does not drop CGDCONT
+  if (!waitForModemReady(30000)) {
+    LOG_E("LTE", "Aborting APN config: modem not ready");
+    return false;
+  }
+  
+  // Then retry AT up to 5 times; accept OK or unsolicited before sending CGDCONT
   clearSerialBuffer();
-  delay(2000);
+  delay(1000);
   bool responsive = false;
   const int maxAttempts = 5;
-  const unsigned long atTimeout = 3000;
+  const unsigned long atTimeout = 4000;
   const unsigned long betweenAttempts = 2000;
   
   for (int attempt = 1; attempt <= maxAttempts; attempt++) {

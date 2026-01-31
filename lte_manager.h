@@ -84,6 +84,9 @@ private:
   // Read available serial data
   String readSerial(uint32_t timeout_ms);
   
+  // Wait until RF (CFUN) and SIM (CPIN) are ready; required before CGDCONT on SIM7070E
+  bool waitForModemReady(uint32_t timeout_ms);
+  
   // HTTP helper functions
   bool httpInit();
   bool httpSetParameter(const char* param, const char* value);
