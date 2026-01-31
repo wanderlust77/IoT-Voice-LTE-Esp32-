@@ -19,27 +19,20 @@ bool LTEManager::init(uint8_t txPin, uint8_t rxPin, uint8_t pwrkeyPin, uint8_t r
   
   LOG_I("LTE", "Initializing LTE modem...");
   
-  // Configure control pins (MIKROE-6287: PWRKEY and RESET are active LOW)
+  // Configure control pins
   pinMode(pinPwrkey, OUTPUT);
   pinMode(pinReset, OUTPUT);
-  digitalWrite(pinPwrkey, HIGH);  // inactive - do not press PWRKEY
-  digitalWrite(pinReset, HIGH);   // inactive - do not reset
+  digitalWrite(pinPwrkey, HIGH);  // PWRKEY is active LOW
+  digitalWrite(pinReset, HIGH);   // RESET is active LOW
   
-  // Initialize UART (Serial2): ESP32 RX=rxPin, TX=txPin -> modem TX,RX
+  // Initialize UART (Serial2 on ESP32)
   modemSerial = &Serial2;
   modemSerial->begin(baudRate, SERIAL_8N1, rxPin, txPin);
   
-  Logger::printf(LOG_INFO, "LTE", "UART: RX=GPIO%d, TX=GPIO%d, Baud=%lu", rxPin, txPin, (unsigned long)baudRate);
+  // Log UART configuration
+  Logger::printf(LOG_INFO, "LTE", "UART: RX=GPIO%d, TX=GPIO%d, Baud=%d", rxPin, txPin, baudRate);
   
-  // Let UART and modem settle
-  delay(300);
-  clearSerialBuffer();
-  
-  // Hardware reset: pulse RESET LOW then HIGH for clean state (optional, helps if modem was hung)
-  digitalWrite(pinReset, LOW);
-  delay(200);
-  digitalWrite(pinReset, HIGH);
-  delay(500);
+  // Clear any pending data
   clearSerialBuffer();
   
   initialized = true;
@@ -64,8 +57,7 @@ bool LTEManager::powerOn() {
   for (int i = 0; i < 5; i++) {
     modemSerial->println("AT");
     Logger::printf(LOG_DEBUG, "LTE", "TX: AT (check %d/5)", i + 1);
-    unsigned long atTimeout = (i < 2) ? 3500 : 2000;  // Longer for first checks (after reset)
-    String resp = readSerial(atTimeout);
+    String resp = readSerial(2000);
     Logger::printf(LOG_DEBUG, "LTE", "RX: %s", resp.c_str());
     
     if (resp.indexOf("OK") >= 0) {
@@ -90,14 +82,10 @@ bool LTEManager::powerOn() {
     delay(500);
   }
   
-  // No OK and no boot messages - modem is off or hung
-  LOG_I("LTE", "Modem off or hung - power cycling...");
+  // No OK and no boot messages - modem may really be off
+  LOG_I("LTE", "Modem off, powering on...");
   
-  // Full power cycle: 1) Turn off (PWRKEY LOW 1.5s), 2) Wait, 3) Turn on (PWRKEY LOW 1.5s)
-  digitalWrite(pinPwrkey, LOW);
-  delay(1500);
-  digitalWrite(pinPwrkey, HIGH);
-  delay(2000);
+  // Pulse PWRKEY low for 1.5 seconds (SIM7070: LOW pulse to turn ON)
   digitalWrite(pinPwrkey, LOW);
   delay(1500);
   digitalWrite(pinPwrkey, HIGH);
@@ -239,93 +227,26 @@ bool LTEManager::checkNetwork(uint32_t timeout_ms) {
 }
 
 // ============================================
-// WAIT FOR MODEM READY (RF + SIM)
-// ============================================
-// SIM7070E accepts AT OK before RF/SIM stack is ready; CGDCONT will be dropped
-// until +CFUN:1 (RF on) and +CPIN: READY (SIM ready). Poll until both are true.
-bool LTEManager::waitForModemReady(uint32_t timeout_ms) {
-  LOG_I("LTE", "Waiting for modem RF/SIM readiness...");
-  unsigned long start = millis();
-  const unsigned long pollInterval = 2000;
-  const unsigned long readTimeout = 4000;
-  int pollCount = 0;
-  
-  while (millis() - start < timeout_ms) {
-    pollCount++;
-    clearSerialBuffer();
-    
-    // CFUN=1 means RF is on and modem is ready for network commands
-    modemSerial->println("AT+CFUN?");
-    Logger::printf(LOG_DEBUG, "LTE", "TX: AT+CFUN? (poll %d)", pollCount);
-    String cfunResp = readSerial(readTimeout);
-    if (cfunResp.indexOf("+CFUN: 1") >= 0 || cfunResp.indexOf("+CFUN:1") >= 0) {
-      LOG_I("LTE", "RF ready (+CFUN: 1)");
-      
-      clearSerialBuffer();
-      modemSerial->println("AT+CPIN?");
-      String cpinResp = readSerial(readTimeout);
-      if (cpinResp.indexOf("+CPIN: READY") >= 0 || cpinResp.indexOf("READY") >= 0) {
-        LOG_I("LTE", "SIM ready (+CPIN: READY)");
-        LOG_I("LTE", "Modem RF/SIM ready");
-        return true;
-      }
-    }
-    
-    delay(pollInterval);
-  }
-  
-  Logger::printf(LOG_ERROR, "LTE", "Modem RF/SIM not ready within %lu ms", timeout_ms);
-  return false;
-}
-
-// ============================================
 // CONFIGURE BEARER APN
 // ============================================
 bool LTEManager::configureBearerAPN(const char* apn) {
   LOG_I("LTE", "Configuring APN...");
   Logger::printf(LOG_INFO, "LTE", "APN: %s", apn);
   
-  // Gate: ensure RF/SIM ready before any APN config (SIM7070E drops CGDCONT otherwise)
-  if (!waitForModemReady(30000)) {
-    LOG_E("LTE", "Aborting APN config: modem not ready");
-    return false;
-  }
-  
-  // SIM7070E can still drop commands if UART is busy; keep retry for AT responsiveness
+  // Modem can go busy after CREG; drain RX and wait for it to settle (up to 5s)
   clearSerialBuffer();
-  bool responsive = false;
-  const int maxAttempts = 5;
-  const unsigned long atTimeout = 3000;
-  const unsigned long betweenAttempts = 2000;
+  delay(3000);
+  clearSerialBuffer();
+  delay(2000);
   
-  for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-    if (attempt > 1) {
-      delay(betweenAttempts);
-      clearSerialBuffer();
-    }
-    modemSerial->println("AT");
-    Logger::printf(LOG_DEBUG, "LTE", "AT responsiveness check %d/%d", attempt, maxAttempts);
-    String atResp = readSerial(atTimeout);
-    
-    // Success = explicit OK or any unsolicited (modem is alive; don't false-fail)
-    if (atResp.indexOf("OK") >= 0) {
-      responsive = true;
-      LOG_I("LTE", "Modem responsive (OK)");
-      break;
-    }
-    if (atResp.indexOf("SMS Ready") >= 0 || atResp.indexOf("READY") >= 0 || atResp.indexOf("+CFUN") >= 0) {
-      responsive = true;
-      Logger::printf(LOG_INFO, "LTE", "Modem responsive (unsolicited), attempt %d", attempt);
-      break;
-    }
-  }
-  
-  if (!responsive) {
-    Logger::printf(LOG_ERROR, "LTE", "Modem not responding before APN config (after %d attempts)", maxAttempts);
+  // Check modem responsiveness
+  if (!sendATCommand("AT", "OK", 3000)) {
+    LOG_E("LTE", "Modem not responding before APN config");
     return false;
   }
   
-  // SIM7070E uses AT+CGDCONT (not SAPBR)
+  // SIM7070E uses AT+CGDCONT instead of SAPBR
+  // Format: AT+CGDCONT=<cid>,"<PDP_type>","<APN>"
   char cmd[128];
   snprintf(cmd, sizeof(cmd), "AT+CGDCONT=1,\"IP\",\"%s\"", apn);
   

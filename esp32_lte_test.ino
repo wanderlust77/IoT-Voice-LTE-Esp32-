@@ -52,22 +52,21 @@ void setup() {
     while(1) delay(1000);  // Halt on error
   }
   
-#if !defined(LTE_SKIP_NETWORK_CHECK) || (LTE_SKIP_NETWORK_CHECK == 0)
-  // Check network registration (CPIN? / CREG?)
+  // Check network registration
   LOG_I("Main", "Checking network registration...");
   if (!lte.checkNetwork(60000)) {  // 60 second timeout
     LOG_E("Main", "Network registration failed!");
     LOG_E("Main", "Check: 1) SIM card inserted, 2) SIM PIN correct, 3) Network coverage");
     LOG_E("Main", "");
+    LOG_E("Main", "NOTE: If signal strength is 99 (no signal), registration will fail.");
+    LOG_E("Main", "You may need to:");
+    LOG_E("Main", "  - Check antenna connection");
+    LOG_E("Main", "  - Move to area with better coverage");
+    LOG_E("Main", "  - Verify SIM card is activated");
+    LOG_E("Main", "");
     LOG_W("Main", "Continuing anyway for API testing (may fail without network)...");
+    // Don't halt - allow API test to proceed (it will fail but we can see the error)
   }
-#else
-  // Skip CPIN?/CREG? - modem stays responsive; go straight to APN/bearer
-  LOG_I("Main", "Skipping network check (LTE_SKIP_NETWORK_CHECK=1)...");
-  // SIM7070E: RF/SIM still initializing after first AT OK; wait before APN/CGDCONT
-  LOG_I("Main", "Post-boot settle 8s (SIM7070E RF/SIM init)...");
-  delay(8000);
-#endif
   
   // Configure bearer APN
   LOG_I("Main", "Configuring bearer APN...");
