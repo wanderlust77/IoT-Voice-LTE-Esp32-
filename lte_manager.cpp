@@ -52,68 +52,38 @@ bool LTEManager::powerOn() {
   
   LOG_I("LTE", "Checking if modem is already on...");
   
-  // First, check if modem is already powered on or booting
+  // First, check if modem is already powered on
   clearSerialBuffer();
-  for (int i = 0; i < 5; i++) {
-    modemSerial->println("AT");
-    Logger::printf(LOG_DEBUG, "LTE", "TX: AT (check %d/5)", i + 1);
-    String resp = readSerial(2000);
-    Logger::printf(LOG_DEBUG, "LTE", "RX: %s", resp.c_str());
-    
-    if (resp.indexOf("OK") >= 0) {
+  for (int i = 0; i < 3; i++) {
+    if (sendATCommand("AT", "OK", 1000)) {
       powered = true;
       LOG_I("LTE", "Modem already powered on");
       return true;
     }
-    // Modem may be booting: unsolicited +CPIN: READY, +CFUN, SMS Ready (no OK yet)
-    // Do NOT pulse PWRKEY here or we will turn the modem OFF
-    if (resp.indexOf("READY") >= 0 || resp.indexOf("+CFUN") >= 0 || resp.indexOf("SMS Ready") >= 0) {
-      LOG_I("LTE", "Modem booting (READY/CFUN/SMS) - waiting for OK...");
-      delay(3000);
-      clearSerialBuffer();
-      modemSerial->println("AT");
-      String retryResp = readSerial(5000);
-      if (retryResp.indexOf("OK") >= 0) {
-        powered = true;
-        LOG_I("LTE", "Modem ready after wait");
-        return true;
-      }
-    }
     delay(500);
   }
   
-  // No OK and no boot messages - modem may really be off
+  // Modem not responding - power it on
   LOG_I("LTE", "Modem off, powering on...");
   
-  // Pulse PWRKEY low for 1.5 seconds (SIM7070: LOW pulse to turn ON)
+  // Pulse PWRKEY low for 1.5 seconds
   digitalWrite(pinPwrkey, LOW);
   delay(1500);
   digitalWrite(pinPwrkey, HIGH);
   
-  LOG_I("LTE", "Waiting for modem boot (up to 20s)...");
+  // Wait for modem to boot (LTE modems can take 10-15 seconds)
+  LOG_I("LTE", "Waiting for modem boot (up to 15s)...");
   
-  for (int attempt = 0; attempt < 10; attempt++) {
+  // Try AT command every 2 seconds for up to 15 seconds
+  for (int attempt = 0; attempt < 8; attempt++) {
     delay(2000);
-    Logger::printf(LOG_INFO, "LTE", "Boot check %d/10...", attempt + 1);
+    Logger::printf(LOG_INFO, "LTE", "Boot check %d/8...", attempt + 1);
     
     clearSerialBuffer();
-    modemSerial->println("AT");
-    String resp = readSerial(3000);
-    if (resp.indexOf("OK") >= 0) {
+    if (sendATCommand("AT", "OK", 2000)) {
       powered = true;
       Logger::printf(LOG_INFO, "LTE", "Modem responded after %d seconds", (attempt + 1) * 2);
       return true;
-    }
-    if (resp.indexOf("READY") >= 0 || resp.indexOf("+CFUN") >= 0) {
-      LOG_I("LTE", "Modem booting, waiting...");
-      delay(2000);
-      clearSerialBuffer();
-      modemSerial->println("AT");
-      if (readSerial(3000).indexOf("OK") >= 0) {
-        powered = true;
-        LOG_I("LTE", "Modem ready");
-        return true;
-      }
     }
   }
   
