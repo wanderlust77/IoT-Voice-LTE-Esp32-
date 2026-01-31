@@ -254,7 +254,7 @@ bool LTEManager::configureBearerAPN(const char* apn) {
   const uint32_t cgdcontTimeout = 15000;
   for (int attempt = 1; attempt <= maxAttempts; attempt++) {
     if (attempt > 1) {
-      LOG_I("LTE", "CGDCONT retry %d/%d...", attempt, maxAttempts);
+      Logger::printf(LOG_INFO, "LTE", "CGDCONT retry %d/%d...", attempt, maxAttempts);
       clearSerialBuffer();
       delay(3000);
     }
@@ -264,7 +264,7 @@ bool LTEManager::configureBearerAPN(const char* apn) {
     }
   }
   
-  LOG_E("LTE", "Failed to configure APN after %d attempts!", maxAttempts);
+  Logger::printf(LOG_ERROR, "LTE", "Failed to configure APN after %d attempts!", maxAttempts);
   String response;
   if (sendATCommandGetResponse("AT+CGDCONT?", response, 5000)) {
     Logger::printf(LOG_INFO, "LTE", "Current CGDCONT: %s", response.c_str());
