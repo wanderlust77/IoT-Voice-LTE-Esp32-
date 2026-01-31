@@ -187,15 +187,38 @@ bool LTEManager::configureBearerAPN(const char* apn) {
   LOG_I("LTE", "Configuring APN...");
   Logger::printf(LOG_INFO, "LTE", "APN: %s", apn);
   
-  // Modem can go busy after CREG; drain RX and wait for it to settle (up to 5s)
-  clearSerialBuffer();
-  delay(3000);
+  // SIM7070E often busy after CREG?; single AT can get 1 byte or nothing. Retry AT
+  // up to 5 times; accept OK or unsolicited (SMS Ready, READY, +CFUN) as responsive.
   clearSerialBuffer();
   delay(2000);
+  bool responsive = false;
+  const int maxAttempts = 5;
+  const unsigned long atTimeout = 3000;
+  const unsigned long betweenAttempts = 2000;
   
-  // Check modem responsiveness
-  if (!sendATCommand("AT", "OK", 3000)) {
-    LOG_E("LTE", "Modem not responding before APN config");
+  for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (attempt > 1) {
+      delay(betweenAttempts);
+      clearSerialBuffer();
+    }
+    modemSerial->println("AT");
+    Logger::printf(LOG_DEBUG, "LTE", "AT check %d/%d before APN", attempt, maxAttempts);
+    String atResp = readSerial(atTimeout);
+    
+    if (atResp.indexOf("OK") >= 0) {
+      responsive = true;
+      LOG_I("LTE", "Modem responsive (OK)");
+      break;
+    }
+    if (atResp.indexOf("SMS Ready") >= 0 || atResp.indexOf("READY") >= 0 || atResp.indexOf("+CFUN") >= 0) {
+      responsive = true;
+      Logger::printf(LOG_INFO, "LTE", "Modem responsive (unsolicited), attempt %d", attempt);
+      break;
+    }
+  }
+  
+  if (!responsive) {
+    Logger::printf(LOG_ERROR, "LTE", "Modem not responding before APN (after %d attempts)", maxAttempts);
     return false;
   }
   

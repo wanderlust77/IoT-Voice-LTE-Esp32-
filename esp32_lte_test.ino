@@ -68,6 +68,10 @@ void setup() {
     // Don't halt - allow API test to proceed (it will fail but we can see the error)
   }
   
+  // SIM7070E can be busy briefly after CREG?; wait before APN/CGDCONT
+  LOG_I("Main", "Settling 3s before APN config...");
+  delay(3000);
+  
   // Configure bearer APN
   LOG_I("Main", "Configuring bearer APN...");
   if (!lte.configureBearerAPN(LTE_APN)) {
