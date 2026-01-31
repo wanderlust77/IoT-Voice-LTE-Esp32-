@@ -234,47 +234,18 @@ bool LTEManager::configureBearerAPN(const char* apn) {
   LOG_I("LTE", "Configuring APN...");
   Logger::printf(LOG_INFO, "LTE", "APN: %s", apn);
   
-  // Gate: wait until RF/SIM ready so SIM7070E does not drop CGDCONT
+  // Gate: wait until RF ready (+CFUN:1) so SIM7070E does not drop CGDCONT
   if (!waitForModemReady(30000)) {
     LOG_E("LTE", "Aborting APN config: modem not ready");
     return false;
   }
   
-  // Then retry AT up to 5 times; accept OK or unsolicited before sending CGDCONT
+  // Modem is ready (CFUN:1); drain RX and proceed directly to CGDCONT
+  // Sending more AT after CFUN? can make modem unresponsive - skip AT retry
   clearSerialBuffer();
-  delay(1000);
-  bool responsive = false;
-  const int maxAttempts = 5;
-  const unsigned long atTimeout = 4000;
-  const unsigned long betweenAttempts = 2000;
+  delay(2000);
   
-  for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-    if (attempt > 1) {
-      delay(betweenAttempts);
-      clearSerialBuffer();
-    }
-    modemSerial->println("AT");
-    Logger::printf(LOG_DEBUG, "LTE", "AT check %d/%d before APN", attempt, maxAttempts);
-    String atResp = readSerial(atTimeout);
-    
-    if (atResp.indexOf("OK") >= 0) {
-      responsive = true;
-      LOG_I("LTE", "Modem responsive (OK)");
-      break;
-    }
-    if (atResp.indexOf("SMS Ready") >= 0 || atResp.indexOf("READY") >= 0 || atResp.indexOf("+CFUN") >= 0) {
-      responsive = true;
-      Logger::printf(LOG_INFO, "LTE", "Modem responsive (unsolicited), attempt %d", attempt);
-      break;
-    }
-  }
-  
-  if (!responsive) {
-    Logger::printf(LOG_ERROR, "LTE", "Modem not responding before APN (after %d attempts)", maxAttempts);
-    return false;
-  }
-  
-  // SIM7070E uses AT+CGDCONT instead of SAPBR
+  // SIM7070E uses AT+CGDCONT (not SAPBR)
   // Format: AT+CGDCONT=<cid>,"<PDP_type>","<APN>"
   char cmd[128];
   snprintf(cmd, sizeof(cmd), "AT+CGDCONT=1,\"IP\",\"%s\"", apn);
