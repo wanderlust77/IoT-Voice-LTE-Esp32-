@@ -241,16 +241,11 @@ bool LTEManager::configureBearerAPN(const char* apn) {
   }
   
   // Modem is ready (CFUN:1); drain RX, wait longer, then send CGDCONT
+  // Skip ATE0: modem often gives no response here and can go silent for next command
   clearSerialBuffer();
   delay(5000);
   
   // SIM7070: CID 0 is the first PDP context (matches CNACT pdpidx 0). Try cid=0 then cid=1.
-  // Send ATE0 so response is only result line (no echo) and we don't misread garbage.
-  if (!sendATCommand("ATE0", "OK", 3000)) {
-    LOG_I("LTE", "ATE0 failed (continuing anyway)");
-  }
-  delay(500);
-  
   const int maxAttempts = 3;
   const uint32_t cgdcontTimeout = 20000;
   const int cidsToTry[] = { 0, 1 };
