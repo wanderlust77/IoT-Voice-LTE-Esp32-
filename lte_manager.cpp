@@ -275,12 +275,29 @@ bool LTEManager::configureBearerAPN(const char* apn) {
     }
   }
   
-  Logger::printf(LOG_ERROR, "LTE", "Failed to configure APN after %d attempts!", maxAttempts);
+  // Try AT+CNCFG as fallback (SIM7070/SIM7080 alternative PDP config)
+  LOG_I("LTE", "Trying CNCFG as fallback...");
+  clearSerialBuffer();
+  delay(2000);
+  char cnfCmd[128];
+  snprintf(cnfCmd, sizeof(cnfCmd), "AT+CNCFG=0,\"IP\",\"%s\"", apn);
+  if (sendATCommand(cnfCmd, "OK", 20000)) {
+    LOG_I("LTE", "APN configured via CNCFG");
+    return true;
+  }
+  
+  Logger::printf(LOG_ERROR, "LTE", "Failed to configure APN (CGDCONT and CNCFG)");
   String response;
   if (sendATCommandGetResponse("AT+CGDCONT?", response, 5000)) {
     Logger::printf(LOG_INFO, "LTE", "Current CGDCONT: %s", response.c_str());
   }
+  
+#if LTE_SKIP_APN_CONFIG
+  LOG_I("LTE", "Skipping APN config - will try CNACT with default/SIM APN");
+  return true;  // Proceed to openBearer; carrier may have APN on SIM
+#else
   return false;
+#endif
 }
 
 // ============================================
