@@ -37,6 +37,8 @@ public:
   
   // Configure bearer profile with APN
   bool configureBearerAPN(const char* apn);
+
+  bool waitForEPSAttach(uint32_t timeout_ms);
   
   // Open bearer connection
   bool openBearer();

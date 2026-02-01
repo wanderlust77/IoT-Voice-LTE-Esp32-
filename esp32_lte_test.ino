@@ -51,20 +51,17 @@ void setup() {
     LOG_E("Main", "Check: 1) Modem power (5V), 2) UART wiring, 3) TX/RX not swapped");
     while(1) delay(1000);  // Halt on error
   }
-  
-#if !defined(LTE_SKIP_NETWORK_CHECK) || (LTE_SKIP_NETWORK_CHECK == 0)
-  // Check network registration (CPIN?/CREG?)
-  LOG_I("Main", "Checking network registration...");
-  if (!lte.checkNetwork(60000)) {
-    LOG_E("Main", "Network registration failed!");
-    LOG_E("Main", "Check: 1) SIM card inserted, 2) SIM PIN correct, 3) Network coverage");
-    LOG_E("Main", "");
-    LOG_W("Main", "Continuing anyway for API testing (may fail without network)...");
+
+  // Wait for RF
+  if (!lte.waitForModemReady(30000)) {
+    LOG_E("Main", "Modem RF not ready");
+    while (1) delay(1000);
   }
-#else
-  // Skip CPIN?/CREG? - modem can enter bad state when CPIN? returns ERROR
-  LOG_I("Main", "Skipping network check (LTE_SKIP_NETWORK_CHECK=1)...");
-#endif
+  
+  if (!lte.waitForEPSAttach(60000)) {
+    LOG_E("Main", "EPS attach failed");
+    while (1) delay(1000);
+  }
   
   // SIM7070E can be busy; wait before APN/CGDCONT
   LOG_I("Main", "Settling 6s before APN config...");

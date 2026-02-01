@@ -574,6 +574,28 @@ String LTEManager::readSerial(uint32_t timeout_ms) {
   return result;
 }
 
+
+bool LTEManager::waitForEPSAttach(uint32_t timeout_ms) {
+  LOG_I("LTE", "Waiting for EPS attach (+CGATT: 1)...");
+  unsigned long start = millis();
+
+  while (millis() - start < timeout_ms) {
+    clearSerialBuffer();
+    modemSerial->println("AT+CGATT?");
+    String resp = readSerial(5000);
+
+    if (resp.indexOf("+CGATT: 1") >= 0) {
+      LOG_I("LTE", "EPS attached");
+      return true;
+    }
+
+    delay(2000);
+  }
+
+  LOG_E("LTE", "EPS attach timeout");
+  return false;
+}
+
 // ============================================
 // HTTP INIT
 // ============================================
