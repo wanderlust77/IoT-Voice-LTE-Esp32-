@@ -521,11 +521,11 @@ String LTEManager::readSerial(uint32_t timeout_ms) {
   while (millis() - startTime < timeout_ms) {
     while (modemSerial->available()) {
       char c = modemSerial->read();
-      // Ignore leading null bytes (noise / modem busy); keep waiting for real response
+      // Ignore leading null bytes (noise / modem busy); don't reset timeout on nulls
+      // so we don't hang if modem trickles nulls for minutes
       if (c == 0 && !hadNonNull) {
         bytesReceived++;
-        startTime = millis();
-        continue;
+        continue;  // do NOT reset startTime - exit after timeout from command send
       }
       hadNonNull = true;
       result += c;
