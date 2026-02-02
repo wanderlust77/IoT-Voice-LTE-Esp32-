@@ -38,6 +38,9 @@ public:
   // Configure bearer profile with APN
   bool configureBearerAPN(const char* apn);
 
+  // Wait until modem RF is ready (+CFUN: 1); call before APN/bearer if desired
+  bool waitForModemReady(uint32_t timeout_ms);
+
   bool waitForEPSAttach(uint32_t timeout_ms);
   
   // Open bearer connection
@@ -85,9 +88,6 @@ private:
   
   // Read available serial data
   String readSerial(uint32_t timeout_ms);
-  
-  // Wait until RF (CFUN) and SIM (CPIN) are ready; required before CGDCONT on SIM7070E
-  bool waitForModemReady(uint32_t timeout_ms);
   
   // HTTP helper functions
   bool httpInit();
