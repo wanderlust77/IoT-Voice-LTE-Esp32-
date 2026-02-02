@@ -58,11 +58,15 @@ void setup() {
     while (1) delay(1000);
   }
   
+#if LTE_SKIP_EPS_ATTACH
+  LOG_I("Main", "Skipping EPS attach check (LTE_SKIP_EPS_ATTACH=1)");
+#else
   if (!lte.waitForEPSAttach(60000)) {
     LOG_E("Main", "EPS attach failed");
     while (1) delay(1000);
   }
-  
+#endif
+
   // SIM7070E can be busy; wait before APN/CGDCONT
   LOG_I("Main", "Settling 6s before APN config...");
   delay(6000);

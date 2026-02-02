@@ -588,6 +588,9 @@ bool LTEManager::waitForEPSAttach(uint32_t timeout_ms) {
       LOG_I("LTE", "EPS attached");
       return true;
     }
+    if (resp.length() > 0) {
+      Logger::printf(LOG_DEBUG, "LTE", "CGATT? response: %s", resp.c_str());
+    }
 
     delay(2000);
   }

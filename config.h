@@ -28,6 +28,7 @@
 #define LTE_APN               "internet.ht.ht"          // HT Mobile (Croatia) APN
 #define LTE_PIN               "5576"                   // SIM PIN (optional, set to "" if no PIN)
 #define LTE_SKIP_NETWORK_CHECK  0  // 1=skip CPIN?/CREG? (avoids modem bad state when CPIN? returns ERROR)
+#define LTE_SKIP_EPS_ATTACH     1  // 1=skip wait for +CGATT:1; proceed to APN/bearer (modem may attach on CNACT)
 #define LTE_SKIP_APN_CONFIG     1  // 1=skip CGDCONT if it fails; try CNACT with default/SIM APN
 #define API_BASE_URL          "https://rmhfhawfcyutzdtwsfnj.supabase.co/functions/v1"
 #define DEVICE_TOKEN          "device_b6525ecf-f009-4068-baa1-c26f5057e6ae"
