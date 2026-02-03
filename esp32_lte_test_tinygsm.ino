@@ -362,28 +362,35 @@ void setup() {
     }
   }
   
-  LOG("LTE", "Initializing TinyGSM...");
+  LOG("LTE", "Initializing TinyGSM with restart...");
   LOG("LTE", "Watch for ### debug lines below:");
   
   // Give modem a moment
   delay(500);
   
-  if (!modem.init()) {
-    LOG("ERROR", "TinyGSM init failed!");
-    LOG("ERROR", "Last AT command above should show what failed");
+  // Try restart() instead of init() - does software reset + full init
+  if (!modem.restart()) {
+    LOG("ERROR", "TinyGSM restart failed! Trying init()...");
     
-    // Try manual AT to verify modem still responds
-    LOG("LTE", "Verifying modem still responds...");
-    SerialAT.println("AT");
-    delay(500);
-    if (SerialAT.available()) {
-      LOG("LTE", "Modem still responds to AT");
-    } else {
-      LOG("ERROR", "Modem stopped responding!");
+    delay(2000);
+    if (!modem.init()) {
+      LOG("ERROR", "TinyGSM init also failed!");
+      
+      // Try manual AT to verify modem still responds
+      LOG("LTE", "Verifying modem still responds...");
+      SerialAT.println("AT");
+      delay(500);
+      if (SerialAT.available()) {
+        LOG("LTE", "Modem still responds - trying to continue anyway...");
+        // Don't halt - try to continue
+      } else {
+        LOG("ERROR", "Modem stopped responding!");
+        while(1) delay(1000);
+      }
     }
-    
-    while(1) delay(1000);
   }
+  
+  LOG("LTE", "TinyGSM initialized successfully!");
   
   // Get modem info
   String modemInfo = modem.getModemInfo();
