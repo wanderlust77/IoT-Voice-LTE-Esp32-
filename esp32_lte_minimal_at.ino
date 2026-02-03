@@ -56,16 +56,39 @@ void setup() {
   // Init UART
   LOG("Init UART...");
   SerialAT.begin(115200, SERIAL_8N1, PIN_LTE_RX, PIN_LTE_TX);
-  delay(1000);
+  delay(2000);
   
-  // Test modem
+  // Clear any boot messages
+  LOG("Clearing buffer...");
+  int cleared = 0;
+  while (SerialAT.available()) {
+    SerialAT.read();
+    cleared++;
+  }
+  if (cleared > 0) {
+    LOGF("Cleared %d bytes", cleared);
+  }
+  delay(500);
+  
+  // Test modem multiple times
   LOG("Testing modem...");
-  String resp = sendATCommand("AT");
-  if (!checkResponse(resp, "OK")) {
-    LOG("ERROR: Modem not responding!");
+  bool modemOK = false;
+  for (int i = 0; i < 3; i++) {
+    String resp = sendATCommand("AT", 1000);
+    if (checkResponse(resp, "OK")) {
+      LOG("Modem OK!");
+      modemOK = true;
+      break;
+    }
+    LOGF("Attempt %d/3 failed, retrying...", i+1);
+    delay(1000);
+  }
+  
+  if (!modemOK) {
+    LOG("ERROR: Modem not responding after 3 attempts!");
+    LOG("Check: External power on? LEDs lit?");
     while(1) delay(1000);
   }
-  LOG("Modem OK!");
   
   // Get modem info
   LOG("Get modem info...");
