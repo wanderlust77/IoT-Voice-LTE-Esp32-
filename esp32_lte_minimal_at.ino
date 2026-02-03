@@ -100,7 +100,7 @@ void setup() {
   
   // Check SIM
   LOG("Check SIM card...");
-  resp = sendATCommand("AT+CPIN?", 2000);
+  String resp = sendATCommand("AT+CPIN?", 2000);
   if (checkResponse(resp, "READY")) {
     LOG("SIM card ready");
   } else {
