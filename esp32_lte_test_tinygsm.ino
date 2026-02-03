@@ -183,61 +183,104 @@ void setup() {
   LOG("Main", "SIM7070E Cat-M Module");
   LOG("Main", "========================================");
   
-  // Initialize modem UART at default baud
-  SerialAT.begin(115200, SERIAL_8N1, PIN_LTE_RX, PIN_LTE_TX);
-  
-  // Power control and check if already on
+  // Setup control pins
   pinMode(PIN_LTE_PWRKEY, OUTPUT);
   pinMode(PIN_LTE_RESET, OUTPUT);
   digitalWrite(PIN_LTE_PWRKEY, HIGH);
   digitalWrite(PIN_LTE_RESET, HIGH);
   delay(100);
   
-  // Check if modem responds at 115200 first
+  // Hardware reset to ensure clean state
+  LOG("LTE", "Resetting modem...");
+  digitalWrite(PIN_LTE_RESET, LOW);
+  delay(300);
+  digitalWrite(PIN_LTE_RESET, HIGH);
+  delay(3000);
+  
+  // Initialize modem UART at 115200
+  LOG("LTE", "Initializing UART at 115200 baud...");
+  SerialAT.begin(115200, SERIAL_8N1, PIN_LTE_RX, PIN_LTE_TX);
+  delay(500);
+  
+  // Clear any junk in buffer
+  while (SerialAT.available()) {
+    SerialAT.read();
+  }
+  delay(1000);
+  
+  // Check if modem responds at 115200
   bool modemAlreadyOn = false;
-  LOG("LTE", "Checking if modem responds at 115200...");
-  for (int i = 0; i < 3; i++) {
+  LOG("LTE", "Testing modem communication...");
+  
+  for (int i = 0; i < 5; i++) {
+    // Clear buffer before sending
+    while (SerialAT.available()) SerialAT.read();
+    
     SerialAT.println("AT");
+    delay(1000);
+    
+    String resp = "";
+    unsigned long start = millis();
+    while (millis() - start < 1000) {
+      if (SerialAT.available()) {
+        char c = SerialAT.read();
+        resp += c;
+      }
+    }
+    
+    LOGF("LTE", "Attempt %d response (%d bytes): [%s]", i+1, resp.length(), resp.c_str());
+    
+    if (resp.indexOf("OK") >= 0) {
+      LOG("LTE", "Modem responding!");
+      modemAlreadyOn = true;
+      break;
+    }
+    
     delay(500);
-    if (SerialAT.available()) {
-      String resp = SerialAT.readString();
-      LOGF("LTE", "Response: %s", resp.c_str());
+  }
+  
+  if (!modemAlreadyOn) {
+    LOG("ERROR", "Modem not responding properly!");
+    LOG("ERROR", "Possible issues:");
+    LOG("ERROR", "  1) TX/RX pins swapped - try swapping GPIO 16 & 17");
+    LOG("ERROR", "  2) Modem not at 115200 baud");
+    LOG("ERROR", "  3) Loose connection");
+    LOG("ERROR", "");
+    LOG("ERROR", "Trying TX/RX swap...");
+    
+    // Try swapping TX/RX
+    SerialAT.end();
+    delay(100);
+    SerialAT.begin(115200, SERIAL_8N1, PIN_LTE_TX, PIN_LTE_RX);  // SWAPPED!
+    delay(500);
+    
+    LOG("LTE", "Testing with swapped TX/RX...");
+    for (int i = 0; i < 3; i++) {
+      while (SerialAT.available()) SerialAT.read();
+      SerialAT.println("AT");
+      delay(1000);
+      
+      String resp = "";
+      unsigned long start = millis();
+      while (millis() - start < 1000) {
+        if (SerialAT.available()) {
+          resp += (char)SerialAT.read();
+        }
+      }
+      
+      LOGF("LTE", "Swapped response: [%s]", resp.c_str());
+      
       if (resp.indexOf("OK") >= 0) {
-        LOG("LTE", "Modem responding at 115200 baud!");
+        LOG("LTE", "SUCCESS! TX/RX were swapped!");
+        LOG("LTE", "Update your wiring or hardware_defs.h");
         modemAlreadyOn = true;
         break;
       }
     }
-  }
-  
-  // If not responding at 115200, try other baud rates
-  if (!modemAlreadyOn) {
-    LOG("LTE", "Modem not at 115200, trying other baud rates...");
-    uint32_t detectedBaud = detectBaudRate();
     
-    if (detectedBaud == 0) {
-      LOG("ERROR", "Modem not responding at any baud rate");
-      LOG("ERROR", "Check: 1) UART wiring, 2) TX/RX swap, 3) Modem power");
+    if (!modemAlreadyOn) {
+      LOG("ERROR", "Still no response. Check hardware.");
       while(1) delay(1000);
-    }
-    
-    // Set modem to 115200 if it's at a different baud
-    if (detectedBaud != 115200) {
-      LOG("LTE", "Setting modem to 115200 baud...");
-      SerialAT.println("AT+IPR=115200");
-      delay(500);
-      SerialAT.readString();  // Discard response
-      
-      SerialAT.updateBaudRate(115200);
-      delay(500);
-      
-      // Verify
-      SerialAT.println("AT");
-      delay(500);
-      String resp = SerialAT.readString();
-      if (resp.indexOf("OK") >= 0) {
-        LOG("LTE", "Modem now at 115200 baud");
-      }
     }
   }
   
