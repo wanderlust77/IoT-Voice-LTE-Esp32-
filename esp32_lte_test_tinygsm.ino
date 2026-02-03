@@ -186,39 +186,58 @@ void setup() {
   // Initialize modem UART at default baud
   SerialAT.begin(115200, SERIAL_8N1, PIN_LTE_RX, PIN_LTE_TX);
   
-  // Power control
-  modemPowerOn();
+  // Power control and check if already on
+  pinMode(PIN_LTE_PWRKEY, OUTPUT);
+  pinMode(PIN_LTE_RESET, OUTPUT);
+  digitalWrite(PIN_LTE_PWRKEY, HIGH);
+  digitalWrite(PIN_LTE_RESET, HIGH);
+  delay(100);
   
-  // Auto-detect baud rate
-  uint32_t detectedBaud = detectBaudRate();
-  if (detectedBaud == 0) {
-    LOG("ERROR", "Modem not responding at any baud rate");
-    LOG("ERROR", "Check: 1) UART wiring, 2) TX/RX swap, 3) Modem power");
-    while(1) delay(1000);
-  }
-  
-  // If detected baud is different from config, optionally set it to 115200
-  if (detectedBaud != LTE_BAUD_RATE) {
-    LOGF("LTE", "Modem at %d but we want %d", detectedBaud, LTE_BAUD_RATE);
-    LOG("LTE", "Setting modem to 115200 baud...");
-    
-    SerialAT.println("AT+IPR=115200");
-    delay(500);
-    String resp = SerialAT.readString();
-    LOGF("LTE", "IPR response: %s", resp.c_str());
-    
-    // Switch our UART to 115200
-    SerialAT.updateBaudRate(115200);
-    delay(500);
-    
-    // Verify
+  // Check if modem responds at 115200 first
+  bool modemAlreadyOn = false;
+  LOG("LTE", "Checking if modem responds at 115200...");
+  for (int i = 0; i < 3; i++) {
     SerialAT.println("AT");
     delay(500);
-    resp = SerialAT.readString();
-    if (resp.indexOf("OK") >= 0) {
-      LOG("LTE", "Modem now at 115200 baud");
-    } else {
-      LOG("WARN", "Baud rate change may have failed, continuing...");
+    if (SerialAT.available()) {
+      String resp = SerialAT.readString();
+      LOGF("LTE", "Response: %s", resp.c_str());
+      if (resp.indexOf("OK") >= 0) {
+        LOG("LTE", "Modem responding at 115200 baud!");
+        modemAlreadyOn = true;
+        break;
+      }
+    }
+  }
+  
+  // If not responding at 115200, try other baud rates
+  if (!modemAlreadyOn) {
+    LOG("LTE", "Modem not at 115200, trying other baud rates...");
+    uint32_t detectedBaud = detectBaudRate();
+    
+    if (detectedBaud == 0) {
+      LOG("ERROR", "Modem not responding at any baud rate");
+      LOG("ERROR", "Check: 1) UART wiring, 2) TX/RX swap, 3) Modem power");
+      while(1) delay(1000);
+    }
+    
+    // Set modem to 115200 if it's at a different baud
+    if (detectedBaud != 115200) {
+      LOG("LTE", "Setting modem to 115200 baud...");
+      SerialAT.println("AT+IPR=115200");
+      delay(500);
+      SerialAT.readString();  // Discard response
+      
+      SerialAT.updateBaudRate(115200);
+      delay(500);
+      
+      // Verify
+      SerialAT.println("AT");
+      delay(500);
+      String resp = SerialAT.readString();
+      if (resp.indexOf("OK") >= 0) {
+        LOG("LTE", "Modem now at 115200 baud");
+      }
     }
   }
   
