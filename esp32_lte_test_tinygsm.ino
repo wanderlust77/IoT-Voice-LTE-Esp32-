@@ -308,40 +308,13 @@ void setup() {
     delay(500);
   }
   
-  if (modemAlreadyOn) {
-    LOG("LTE", "Configuring modem to clean state...");
-    
-    // Disable echo
-    SerialAT.println("ATE0");
-    delay(500);
-    while (SerialAT.available()) SerialAT.read();
-    
-    // Disable unsolicited result codes
-    SerialAT.println("AT+CMEE=0");  // Disable extended errors
-    delay(300);
-    while (SerialAT.available()) SerialAT.read();
-    
-    SerialAT.println("AT+CREG=0");  // Disable network registration URC
-    delay(300);
-    while (SerialAT.available()) SerialAT.read();
-    
-    SerialAT.println("AT+CGREG=0"); // Disable GPRS registration URC
-    delay(300);
-    while (SerialAT.available()) SerialAT.read();
-    
-    SerialAT.println("AT+CEREG=0"); // Disable EPS registration URC
-    delay(300);
-    while (SerialAT.available()) SerialAT.read();
-    
-    // Verify clean communication
-    LOG("LTE", "Testing clean communication...");
-    SerialAT.println("AT");
-    delay(500);
-    String finalTest = "";
-    while (SerialAT.available()) {
-      finalTest += (char)SerialAT.read();
-    }
-    LOGF("LTE", "Final test response: [%s]", finalTest.c_str());
+  // Skip all pre-configuration - let TinyGSM handle everything
+  LOG("LTE", "Skipping pre-config, letting TinyGSM initialize...");
+  delay(1000);
+  
+  // Just clear buffer
+  while (SerialAT.available()) {
+    SerialAT.read();
   }
   
   if (!modemAlreadyOn) {
