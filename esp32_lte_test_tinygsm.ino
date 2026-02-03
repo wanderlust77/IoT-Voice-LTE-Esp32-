@@ -11,7 +11,8 @@
 
 #define TINY_GSM_MODEM_SIM7070
 #define TINY_GSM_RX_BUFFER 1024
-#define TINY_GSM_DEBUG Serial  // Enable debug output
+// Disable debug to reduce serial spam
+// #define TINY_GSM_DEBUG Serial
 
 #include <TinyGsmClient.h>
 #include "config.h"
@@ -228,15 +229,52 @@ void setup() {
       }
     }
     
-    LOGF("LTE", "Attempt %d response (%d bytes): [%s]", i+1, resp.length(), resp.c_str());
+    LOGF("LTE", "Attempt %d response (%d bytes)", i+1, resp.length());
     
-    if (resp.indexOf("OK") >= 0) {
+    // Check for OK (might be "OK" or corrupted like "OJ")
+    if (resp.indexOf("OK") >= 0 || resp.indexOf("OJ") >= 0 || resp.indexOf("OI") >= 0) {
       LOG("LTE", "Modem responding!");
       modemAlreadyOn = true;
       break;
     }
     
     delay(500);
+  }
+  
+  if (modemAlreadyOn) {
+    LOG("LTE", "Configuring modem to clean state...");
+    
+    // Disable echo
+    SerialAT.println("ATE0");
+    delay(500);
+    while (SerialAT.available()) SerialAT.read();
+    
+    // Disable unsolicited result codes
+    SerialAT.println("AT+CMEE=0");  // Disable extended errors
+    delay(300);
+    while (SerialAT.available()) SerialAT.read();
+    
+    SerialAT.println("AT+CREG=0");  // Disable network registration URC
+    delay(300);
+    while (SerialAT.available()) SerialAT.read();
+    
+    SerialAT.println("AT+CGREG=0"); // Disable GPRS registration URC
+    delay(300);
+    while (SerialAT.available()) SerialAT.read();
+    
+    SerialAT.println("AT+CEREG=0"); // Disable EPS registration URC
+    delay(300);
+    while (SerialAT.available()) SerialAT.read();
+    
+    // Verify clean communication
+    LOG("LTE", "Testing clean communication...");
+    SerialAT.println("AT");
+    delay(500);
+    String finalTest = "";
+    while (SerialAT.available()) {
+      finalTest += (char)SerialAT.read();
+    }
+    LOGF("LTE", "Final test response: [%s]", finalTest.c_str());
   }
   
   if (!modemAlreadyOn) {
