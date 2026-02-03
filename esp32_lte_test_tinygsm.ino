@@ -91,26 +91,8 @@ bool checkModemAlive() {
 }
 
 void modemPowerOn() {
-  pinMode(PIN_LTE_PWRKEY, OUTPUT);
-  pinMode(PIN_LTE_RESET, OUTPUT);
-  digitalWrite(PIN_LTE_PWRKEY, HIGH);
-  digitalWrite(PIN_LTE_RESET, HIGH);
-  delay(100);
-  
-  // Check if modem already responds
-  if (checkModemAlive()) {
-    return;  // Already on, skip power cycle
-  }
-  
-  LOG("LTE", "Modem off, powering on...");
-  
-  // Pulse PWRKEY to power on (1.5s low)
-  digitalWrite(PIN_LTE_PWRKEY, LOW);
-  delay(1500);
-  digitalWrite(PIN_LTE_PWRKEY, HIGH);
-  
-  LOG("LTE", "Waiting for modem to boot (15s)...");
-  delay(15000);
+  // This function is no longer used - power control is in setup()
+  // Kept for compatibility with old code structure
 }
 
 // NOTE: No hardware reset available on LTE IoT 17 Click
