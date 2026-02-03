@@ -184,30 +184,28 @@ void setup() {
   LOG("Main", "SIM7070E Cat-M Module");
   LOG("Main", "========================================");
   
-  // Setup control pins
+  // Setup control pins (keep RESET high, don't toggle it - GPIO4 is strapping pin)
   pinMode(PIN_LTE_PWRKEY, OUTPUT);
   pinMode(PIN_LTE_RESET, OUTPUT);
   digitalWrite(PIN_LTE_PWRKEY, HIGH);
-  digitalWrite(PIN_LTE_RESET, HIGH);
-  delay(100);
-  
-  // Hardware reset to ensure clean state
-  LOG("LTE", "Resetting modem...");
-  digitalWrite(PIN_LTE_RESET, LOW);
-  delay(300);
-  digitalWrite(PIN_LTE_RESET, HIGH);
-  delay(3000);
+  digitalWrite(PIN_LTE_RESET, HIGH);  // Keep high, don't reset
   
   // Initialize modem UART at 115200
   LOG("LTE", "Initializing UART at 115200 baud...");
   SerialAT.begin(115200, SERIAL_8N1, PIN_LTE_RX, PIN_LTE_TX);
-  delay(500);
+  delay(2000);  // Longer delay for UART to stabilize
   
   // Clear any junk in buffer
+  LOG("LTE", "Clearing buffer...");
+  int cleared = 0;
   while (SerialAT.available()) {
     SerialAT.read();
+    cleared++;
   }
-  delay(1000);
+  if (cleared > 0) {
+    LOGF("LTE", "Cleared %d bytes from buffer", cleared);
+  }
+  delay(500);
   
   // Check if modem responds at 115200
   bool modemAlreadyOn = false;
@@ -221,19 +219,38 @@ void setup() {
     delay(1000);
     
     String resp = "";
+    String hexResp = "";
     unsigned long start = millis();
     while (millis() - start < 1000) {
       if (SerialAT.available()) {
         char c = SerialAT.read();
         resp += c;
+        // Build hex representation
+        char hex[4];
+        sprintf(hex, "%02X ", (unsigned char)c);
+        hexResp += hex;
       }
     }
     
-    LOGF("LTE", "Attempt %d response (%d bytes)", i+1, resp.length());
+    if (resp.length() > 0) {
+      LOGF("LTE", "Attempt %d: %d bytes", i+1, resp.length());
+      LOGF("LTE", "  ASCII: [%s]", resp.c_str());
+      LOGF("LTE", "  HEX: %s", hexResp.c_str());
+    } else {
+      LOGF("LTE", "Attempt %d: No response", i+1);
+    }
     
-    // Check for OK (might be "OK" or corrupted like "OJ")
-    if (resp.indexOf("OK") >= 0 || resp.indexOf("OJ") >= 0 || resp.indexOf("OI") >= 0) {
+    // Check for OK or any AT command echo
+    if (resp.indexOf("OK") >= 0 || resp.indexOf("OJ") >= 0 || 
+        resp.indexOf("OI") >= 0 || resp.indexOf("AT") >= 0) {
       LOG("LTE", "Modem responding!");
+      modemAlreadyOn = true;
+      break;
+    }
+    
+    // If we got any bytes, the UART is working but modem might be busy
+    if (resp.length() > 0 && i >= 2) {
+      LOG("LTE", "Got response but no OK - modem may be booting, continuing...");
       modemAlreadyOn = true;
       break;
     }
