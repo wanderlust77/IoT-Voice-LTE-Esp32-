@@ -31,6 +31,46 @@ TinyGsmClient client(modem);
 #define LOGF(tag, fmt, ...) Serial.printf("[%6lu] [%-5s] " fmt "\n", millis(), tag, __VA_ARGS__)
 
 // ============================================
+// BAUD RATE AUTO-DETECTION
+// ============================================
+uint32_t detectBaudRate() {
+  uint32_t rates[] = {9600, 115200, 57600, 38400, 19200, 460800};
+  
+  LOG("LTE", "Auto-detecting baud rate...");
+  
+  for (int i = 0; i < 6; i++) {
+    uint32_t rate = rates[i];
+    LOGF("LTE", "Trying %d baud...", rate);
+    
+    SerialAT.updateBaudRate(rate);
+    delay(100);
+    
+    // Clear buffer
+    while (SerialAT.available()) SerialAT.read();
+    
+    // Try AT command 3 times
+    for (int attempt = 0; attempt < 3; attempt++) {
+      SerialAT.println("AT");
+      delay(500);
+      
+      if (SerialAT.available()) {
+        String resp = SerialAT.readString();
+        LOGF("LTE", "  Response: %s", resp.c_str());
+        
+        if (resp.indexOf("OK") >= 0) {
+          LOGF("LTE", "Found modem at %d baud!", rate);
+          return rate;
+        }
+      }
+      delay(200);
+    }
+  }
+  
+  LOG("ERROR", "Could not detect baud rate!");
+  return 0;
+}
+
+// ============================================
 // MODEM POWER CONTROL
 // ============================================
 bool checkModemAlive() {
@@ -40,7 +80,6 @@ bool checkModemAlive() {
     delay(500);
     if (SerialAT.available()) {
       String resp = SerialAT.readString();
-      LOGF("LTE", "Response: %s", resp.c_str());
       if (resp.indexOf("OK") >= 0) {
         LOG("LTE", "Modem already powered on");
         return true;
@@ -144,23 +183,43 @@ void setup() {
   LOG("Main", "SIM7070E Cat-M Module");
   LOG("Main", "========================================");
   
-  // Initialize modem UART
-  SerialAT.begin(LTE_BAUD_RATE, SERIAL_8N1, PIN_LTE_RX, PIN_LTE_TX);
+  // Initialize modem UART at default baud
+  SerialAT.begin(115200, SERIAL_8N1, PIN_LTE_RX, PIN_LTE_TX);
   
   // Power control
   modemPowerOn();
   
-  // Manual AT test before TinyGSM init
-  LOG("LTE", "Testing manual AT command...");
-  SerialAT.println("AT");
-  delay(1000);
-  if (SerialAT.available()) {
-    String resp = SerialAT.readString();
-    LOGF("LTE", "AT response: %s", resp.c_str());
-  } else {
-    LOG("ERROR", "No response to AT command!");
-    LOG("ERROR", "Try: 1) Check baud rate, 2) Swap TX/RX, 3) Check power");
+  // Auto-detect baud rate
+  uint32_t detectedBaud = detectBaudRate();
+  if (detectedBaud == 0) {
+    LOG("ERROR", "Modem not responding at any baud rate");
+    LOG("ERROR", "Check: 1) UART wiring, 2) TX/RX swap, 3) Modem power");
     while(1) delay(1000);
+  }
+  
+  // If detected baud is different from config, optionally set it to 115200
+  if (detectedBaud != LTE_BAUD_RATE) {
+    LOGF("LTE", "Modem at %d but we want %d", detectedBaud, LTE_BAUD_RATE);
+    LOG("LTE", "Setting modem to 115200 baud...");
+    
+    SerialAT.println("AT+IPR=115200");
+    delay(500);
+    String resp = SerialAT.readString();
+    LOGF("LTE", "IPR response: %s", resp.c_str());
+    
+    // Switch our UART to 115200
+    SerialAT.updateBaudRate(115200);
+    delay(500);
+    
+    // Verify
+    SerialAT.println("AT");
+    delay(500);
+    resp = SerialAT.readString();
+    if (resp.indexOf("OK") >= 0) {
+      LOG("LTE", "Modem now at 115200 baud");
+    } else {
+      LOG("WARN", "Baud rate change may have failed, continuing...");
+    }
   }
   
   LOG("LTE", "Initializing TinyGSM...");
