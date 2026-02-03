@@ -189,31 +189,66 @@ void setup() {
   pinMode(PIN_LTE_RESET, OUTPUT);
   digitalWrite(PIN_LTE_PWRKEY, HIGH);
   digitalWrite(PIN_LTE_RESET, HIGH);
-  delay(100);
   
-  // Hardware reset for clean state (GPIO23, safe to use)
-  LOG("LTE", "Resetting modem via RESET pin...");
-  digitalWrite(PIN_LTE_RESET, LOW);
-  delay(300);
-  digitalWrite(PIN_LTE_RESET, HIGH);
-  delay(3000);  // Wait for modem to boot after reset
-  
-  // Initialize modem UART at 115200
+  // Initialize UART first
   LOG("LTE", "Initializing UART at 115200 baud...");
   SerialAT.begin(115200, SERIAL_8N1, PIN_LTE_RX, PIN_LTE_TX);
-  delay(2000);  // Longer delay for UART to stabilize
-  
-  // Clear any junk in buffer
-  LOG("LTE", "Clearing buffer...");
-  int cleared = 0;
-  while (SerialAT.available()) {
-    SerialAT.read();
-    cleared++;
-  }
-  if (cleared > 0) {
-    LOGF("LTE", "Cleared %d bytes from buffer", cleared);
-  }
   delay(500);
+  
+  // Try communicating with modem first (might already be on)
+  LOG("LTE", "Checking if modem is already on...");
+  bool modemOn = false;
+  for (int i = 0; i < 2; i++) {
+    while (SerialAT.available()) SerialAT.read();
+    SerialAT.println("AT");
+    delay(500);
+    if (SerialAT.available()) {
+      String resp = SerialAT.readString();
+      LOGF("LTE", "Initial AT response: [%s]", resp.c_str());
+      if (resp.indexOf("OK") >= 0) {
+        modemOn = true;
+        break;
+      }
+    }
+  }
+  
+  if (!modemOn) {
+    LOG("LTE", "No response. Trying PWRKEY power-on...");
+    digitalWrite(PIN_LTE_PWRKEY, LOW);
+    delay(1500);
+    digitalWrite(PIN_LTE_PWRKEY, HIGH);
+    
+    LOG("LTE", "Waiting for modem boot messages (15s)...");
+    unsigned long bootStart = millis();
+    String bootMsg = "";
+    while (millis() - bootStart < 15000) {
+      if (SerialAT.available()) {
+        char c = SerialAT.read();
+        bootMsg += c;
+        Serial.print(c);  // Echo boot messages in real-time
+        
+        // Check for boot complete indicators
+        if (bootMsg.indexOf("RDY") >= 0 || 
+            bootMsg.indexOf("PB DONE") >= 0 ||
+            bootMsg.indexOf("SMS Ready") >= 0) {
+          Serial.println();
+          LOG("LTE", "Boot message detected!");
+          modemOn = true;
+          break;
+        }
+      }
+      delay(10);
+    }
+    
+    if (bootMsg.length() > 0) {
+      Serial.println();
+      LOGF("LTE", "Boot messages (%d bytes): %s", bootMsg.length(), bootMsg.c_str());
+    }
+  }
+  
+  // Clear buffer
+  delay(1000);
+  while (SerialAT.available()) SerialAT.read();
   
   // Check if modem responds at 115200
   bool modemAlreadyOn = false;
