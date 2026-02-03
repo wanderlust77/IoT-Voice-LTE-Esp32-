@@ -41,8 +41,8 @@
 #define PIN_LTE_TX        17  // ESP32 TX -> Modem RX
 #define PIN_LTE_RX        16  // ESP32 RX <- Modem TX
 #define PIN_LTE_PWRKEY    18  // Power key (pulse to turn on/off)
-#define PIN_LTE_RESET     4   // Reset pin (GPIO4 - strapping pin, use with care)
-#define PIN_LTE_CTS       23  // CTS flow control (optional, not used)
+#define PIN_LTE_RESET     23  // Reset pin
+#define PIN_LTE_CTS       4   // CTS flow control (not used, strapping pin)
 
 // ============================================
 // USER INPUT

@@ -184,11 +184,19 @@ void setup() {
   LOG("Main", "SIM7070E Cat-M Module");
   LOG("Main", "========================================");
   
-  // Setup control pins (keep RESET high, don't toggle it - GPIO4 is strapping pin)
+  // Setup control pins
   pinMode(PIN_LTE_PWRKEY, OUTPUT);
   pinMode(PIN_LTE_RESET, OUTPUT);
   digitalWrite(PIN_LTE_PWRKEY, HIGH);
-  digitalWrite(PIN_LTE_RESET, HIGH);  // Keep high, don't reset
+  digitalWrite(PIN_LTE_RESET, HIGH);
+  delay(100);
+  
+  // Hardware reset for clean state (GPIO23, safe to use)
+  LOG("LTE", "Resetting modem via RESET pin...");
+  digitalWrite(PIN_LTE_RESET, LOW);
+  delay(300);
+  digitalWrite(PIN_LTE_RESET, HIGH);
+  delay(3000);  // Wait for modem to boot after reset
   
   // Initialize modem UART at 115200
   LOG("LTE", "Initializing UART at 115200 baud...");
