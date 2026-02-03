@@ -11,6 +11,7 @@
 
 #define TINY_GSM_MODEM_SIM7070
 #define TINY_GSM_RX_BUFFER 1024
+#define TINY_GSM_DEBUG Serial  // Enable debug output
 
 #include <TinyGsmClient.h>
 #include "config.h"
@@ -32,15 +33,36 @@ TinyGsmClient client(modem);
 // ============================================
 // MODEM POWER CONTROL
 // ============================================
+bool checkModemAlive() {
+  LOG("LTE", "Checking if modem already on...");
+  for (int i = 0; i < 3; i++) {
+    SerialAT.println("AT");
+    delay(500);
+    if (SerialAT.available()) {
+      String resp = SerialAT.readString();
+      LOGF("LTE", "Response: %s", resp.c_str());
+      if (resp.indexOf("OK") >= 0) {
+        LOG("LTE", "Modem already powered on");
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 void modemPowerOn() {
-  LOG("LTE", "Powering on modem...");
   pinMode(PIN_LTE_PWRKEY, OUTPUT);
   pinMode(PIN_LTE_RESET, OUTPUT);
-  
-  // Ensure PWRKEY is high (inactive)
   digitalWrite(PIN_LTE_PWRKEY, HIGH);
   digitalWrite(PIN_LTE_RESET, HIGH);
   delay(100);
+  
+  // Check if modem already responds
+  if (checkModemAlive()) {
+    return;  // Already on, skip power cycle
+  }
+  
+  LOG("LTE", "Modem off, powering on...");
   
   // Pulse PWRKEY to power on (1.5s low)
   digitalWrite(PIN_LTE_PWRKEY, LOW);
@@ -128,10 +150,23 @@ void setup() {
   // Power control
   modemPowerOn();
   
-  LOG("LTE", "Initializing modem...");
+  // Manual AT test before TinyGSM init
+  LOG("LTE", "Testing manual AT command...");
+  SerialAT.println("AT");
+  delay(1000);
+  if (SerialAT.available()) {
+    String resp = SerialAT.readString();
+    LOGF("LTE", "AT response: %s", resp.c_str());
+  } else {
+    LOG("ERROR", "No response to AT command!");
+    LOG("ERROR", "Try: 1) Check baud rate, 2) Swap TX/RX, 3) Check power");
+    while(1) delay(1000);
+  }
+  
+  LOG("LTE", "Initializing TinyGSM...");
   if (!modem.init()) {
-    LOG("ERROR", "Modem init failed!");
-    LOG("ERROR", "Check: 1) Power (5V), 2) UART wiring, 3) TX/RX pins");
+    LOG("ERROR", "TinyGSM init failed!");
+    LOG("ERROR", "Check debug output above for AT command responses");
     while(1) delay(1000);
   }
   
