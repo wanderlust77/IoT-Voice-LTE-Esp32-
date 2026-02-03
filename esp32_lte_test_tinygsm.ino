@@ -113,13 +113,8 @@ void modemPowerOn() {
   delay(15000);
 }
 
-void modemReset() {
-  LOG("LTE", "Resetting modem...");
-  digitalWrite(PIN_LTE_RESET, LOW);
-  delay(200);
-  digitalWrite(PIN_LTE_RESET, HIGH);
-  delay(3000);
-}
+// NOTE: No hardware reset available on LTE IoT 17 Click
+// RST pin is ID SEL, not a reset line
 
 // ============================================
 // HTTP POST HELPER
@@ -184,31 +179,62 @@ void setup() {
   LOG("Main", "SIM7070E Cat-M Module");
   LOG("Main", "========================================");
   
-  // Setup control pins
+  // Setup PWRKEY pin (only control pin available - no hardware reset on this board)
   pinMode(PIN_LTE_PWRKEY, OUTPUT);
-  pinMode(PIN_LTE_RESET, OUTPUT);
-  digitalWrite(PIN_LTE_PWRKEY, HIGH);
-  digitalWrite(PIN_LTE_RESET, HIGH);
+  digitalWrite(PIN_LTE_PWRKEY, HIGH);  // Inactive state
   
-  // Initialize UART first
-  LOG("LTE", "Initializing UART at 115200 baud...");
+  LOG("LTE", "========================================");
+  LOG("LTE", "IMPORTANT: Check the board LEDs:");
+  LOG("LTE", "  - LD3 (STAT/Yellow): Should be ON if modem powered");
+  LOG("LTE", "  - LD2 (NET/Red): Network status");
+  LOG("LTE", "  - LD1 (PWR): Power indicator");
+  LOG("LTE", "========================================");
+  
+  // Initialize UART
+  LOG("LTE", "Initializing UART at 115200 baud (datasheet default)...");
   SerialAT.begin(115200, SERIAL_8N1, PIN_LTE_RX, PIN_LTE_TX);
-  delay(500);
+  delay(1000);
   
-  // Try communicating with modem first (might already be on)
-  LOG("LTE", "Checking if modem is already on...");
+  // Check for any data in buffer (unsolicited messages, boot messages)
+  LOG("LTE", "Checking for existing data...");
+  delay(500);
+  if (SerialAT.available()) {
+    String existing = "";
+    while (SerialAT.available()) {
+      existing += (char)SerialAT.read();
+    }
+    LOGF("LTE", "Found data in buffer: [%s]", existing.c_str());
+  }
+  
+  // Try AT command (modem might already be on)
+  LOG("LTE", "Testing if modem responds to AT...");
   bool modemOn = false;
-  for (int i = 0; i < 2; i++) {
-    while (SerialAT.available()) SerialAT.read();
+  for (int i = 0; i < 3; i++) {
+    while (SerialAT.available()) SerialAT.read();  // Clear
     SerialAT.println("AT");
-    delay(500);
-    if (SerialAT.available()) {
-      String resp = SerialAT.readString();
-      LOGF("LTE", "Initial AT response: [%s]", resp.c_str());
+    delay(1000);
+    
+    String resp = "";
+    String hex = "";
+    while (SerialAT.available()) {
+      char c = SerialAT.read();
+      resp += c;
+      char h[4];
+      sprintf(h, "%02X ", (unsigned char)c);
+      hex += h;
+    }
+    
+    if (resp.length() > 0) {
+      LOGF("LTE", "Attempt %d: [%s]", i+1, resp.c_str());
+      LOGF("LTE", "  HEX: %s", hex.c_str());
+      
       if (resp.indexOf("OK") >= 0) {
+        LOG("LTE", "Modem is ON and responding!");
         modemOn = true;
         break;
       }
+    } else {
+      LOGF("LTE", "Attempt %d: No response", i+1);
     }
   }
   

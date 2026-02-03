@@ -36,13 +36,19 @@
 #define PIN_NFC_RST       32  // Reset
 
 // ============================================
-// LTE MODEM (MIKROE-6287, UART2)
+// LTE MODEM (MIKROE-6287 - LTE IoT 17 Click, UART2)
 // ============================================
-#define PIN_LTE_TX        17  // ESP32 TX -> Modem RX
-#define PIN_LTE_RX        16  // ESP32 RX <- Modem TX
-#define PIN_LTE_PWRKEY    18  // Power key (pulse to turn on/off)
-#define PIN_LTE_RESET     23  // Reset pin
-#define PIN_LTE_CTS       4   // CTS flow control (not used, strapping pin)
+// mikroBUS pinout from datasheet:
+// Pin 1 (AN) = PWR (Module Power-ON) = PWRKEY
+// Pin 2 (RST) = ID SEL (NOT a hardware reset!)
+// Pin 13 (RX) = Module TX
+// Pin 14 (TX) = Module RX
+// Pin 15 (INT) = CTS
+#define PIN_LTE_TX        17  // ESP32 TX -> Modem RX (mikroBUS pin 14)
+#define PIN_LTE_RX        16  // ESP32 RX <- Modem TX (mikroBUS pin 13)
+#define PIN_LTE_PWRKEY    18  // Power ON/OFF (mikroBUS pin 1/AN)
+// Note: There is NO hardware RESET on this board - RST pin is ID SEL
+#define PIN_LTE_CTS       4   // CTS flow control (mikroBUS pin 15, optional)
 
 // ============================================
 // USER INPUT
