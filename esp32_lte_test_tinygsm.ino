@@ -11,8 +11,7 @@
 
 #define TINY_GSM_MODEM_SIM7070
 #define TINY_GSM_RX_BUFFER 1024
-// Disable debug to reduce serial spam
-// #define TINY_GSM_DEBUG Serial
+#define TINY_GSM_DEBUG Serial  // Re-enable to see what fails
 
 #include <TinyGsmClient.h>
 #include "config.h"
@@ -391,9 +390,25 @@ void setup() {
   }
   
   LOG("LTE", "Initializing TinyGSM...");
+  LOG("LTE", "Watch for ### debug lines below:");
+  
+  // Give modem a moment
+  delay(500);
+  
   if (!modem.init()) {
     LOG("ERROR", "TinyGSM init failed!");
-    LOG("ERROR", "Check debug output above for AT command responses");
+    LOG("ERROR", "Last AT command above should show what failed");
+    
+    // Try manual AT to verify modem still responds
+    LOG("LTE", "Verifying modem still responds...");
+    SerialAT.println("AT");
+    delay(500);
+    if (SerialAT.available()) {
+      LOG("LTE", "Modem still responds to AT");
+    } else {
+      LOG("ERROR", "Modem stopped responding!");
+    }
+    
     while(1) delay(1000);
   }
   
